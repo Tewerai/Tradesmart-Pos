@@ -1,0 +1,24 @@
+Widget _buildSalesSummaryCard() {
+  return Card(
+    color: Colors.blue[50],
+    child: Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: Column(
+        children: [
+          Text('Sales Summary',
+              style: TextStyle(fontWeight: FontWeight.bold)),
+          SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _buildSummaryItem('Sales', totalSales, completedSalesCount, Colors.green),
+              _buildSummaryItem('Credits', totalCredits, creditCount, Colors.orange),
+              _buildSummaryItem('Refunds', totalRefunds, refundCount, Colors.red),
+              _buildSummaryItem('Drafts', 0, draftCount, Colors.blue),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+}
