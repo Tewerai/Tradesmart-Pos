@@ -13,15 +13,11 @@ class MyHttpOverrides extends HttpOverrides {
   @override
   HttpClient createHttpClient(SecurityContext? context) {
     context ??= SecurityContext.defaultContext;
-
-    // Add Let's Encrypt root certificate to the SecurityContext
     try {
       context.setTrustedCertificatesBytes(utf8.encode(_letsEncryptCert));
-      print('Certificate added to the security context.');
     } catch (e) {
-      print('Error adding certificate to the security context: $e');
+      print('Error adding certificate: $e');
     }
-
     return super.createHttpClient(context)
       ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
   }
@@ -66,7 +62,7 @@ void main() {
 }
 
 Future<void> login(String username, String password, BuildContext context) async {
-  var url = Uri.parse('https://blueichor.org/log2.php'); // Replace with your server URL
+  var url = Uri.parse('https://blueichor.org/log2.php'); 
   
   ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(
@@ -87,13 +83,12 @@ Future<void> login(String username, String password, BuildContext context) async
       'password': password,
     });
 
-    ScaffoldMessenger.of(context).hideCurrentSnackBar(); // Hide the loader
+    ScaffoldMessenger.of(context).hideCurrentSnackBar(); 
 
     if (response.statusCode == 200) {
       var data = json.decode(response.body);
       if (data['success']) {
         final SharedPreferences prefs = await SharedPreferences.getInstance();
-
         prefs.setString('fullname', data['fullname']);
         prefs.setString('shopName', data['shopName']);
         prefs.setString('address', data['shopaddress'] ?? '');
@@ -106,9 +101,20 @@ Future<void> login(String username, String password, BuildContext context) async
         prefs.setString('codes', json.encode(data['codes']));
         prefs.setString('quantities', json.encode(data['quantities']));
         prefs.setString('categories', json.encode(data['categories']));
-        print(data['fullname']);
-        print(data['categories']);
-        print(data['measure']);
+        
+        int zimraEnabled = data['zimra_enabled'] ?? 0;
+        prefs.setInt('zimra_enabled', zimraEnabled);
+        prefs.setBool('zimraEnabled', zimraEnabled == 1);
+        
+        if (data['zimra_status'] != null) {
+          prefs.setString('zimra_status', data['zimra_status']);
+        }
+        if (data['zimra_device_id'] != null) {
+          prefs.setInt('zimra_device_id', data['zimra_device_id']);
+        }
+        if (data['zimra_fiscal_day_status'] != null) {
+          prefs.setString('zimra_fiscal_day_status', data['zimra_fiscal_day_status']);
+        }
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -117,21 +123,18 @@ Future<void> login(String username, String password, BuildContext context) async
           ),
         );
 
-        Navigator.push(
+        Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => HomePage()), // Navigate to HomePage on success
+          MaterialPageRoute(builder: (context) => HomePage()), 
         );
       } else {
-        // Handle login error
         _showSnackBar(context, data['message']);
       }
     } else {
-      // Handle server error
       _showSnackBar(context, 'Server error. Please try again later.');
     }
   } catch (e) {
-    // Handle network error
-    ScaffoldMessenger.of(context).hideCurrentSnackBar(); // Hide the loader
+    ScaffoldMessenger.of(context).hideCurrentSnackBar(); 
     _showSnackBar(context, 'Error: $e');
   }
 }
@@ -149,122 +152,309 @@ class LoginPag extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      debugShowCheckedModeBanner: false,
       home: LoginPage(),
       theme: ThemeData(
-        primarySwatch: Colors.blue, // Set your desired primary color
-        textTheme: TextTheme(
-          bodyMedium: TextStyle(
-            color: Colors.grey, // Set text color
-            fontSize: 18.0,
-          ),
-        ),
-        fontFamily: 'YourCustomFont', // Replace 'YourCustomFont' with the actual font family name
+        primarySwatch: Colors.blue,
+        fontFamily: 'YourCustomFont',
       ),
     );
   }
 }
 
-class LoginPage extends StatelessWidget {
+class LoginPage extends StatefulWidget {
+  @override
+  _LoginPageState createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMixin {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+  
+  // We only need a fade animation for the image now
+  late AnimationController _imageFadeController;
+  late Animation<double> _imageFadeAnimation;
+
+  // Define the exact blue color from the image
+  final Color _brandBlue = const Color(0xFF1148C8);
+
+  @override
+  void initState() {
+    super.initState();
+    
+    // Setup fade animation for the picture
+    _imageFadeController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500), // 1.5 seconds fade
+    );
+    
+    _imageFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _imageFadeController,
+        curve: Curves.easeIn,
+      ),
+    );
+    
+    // Start the fade animation
+    _imageFadeController.forward();
+  }
+
+  @override
+  void dispose() {
+    _imageFadeController.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          'TradeSmart',
-          style: TextStyle(
-            color: Colors.black, // Set text color
-          ),
-        ),
-        centerTitle: true,
-        elevation: 0, // Remove app bar elevation
-        backgroundColor: Colors.transparent, // Set app bar background color to transparent
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
+      backgroundColor: Colors.white, // Pure white background like the image
+      body: SafeArea(
         child: SingleChildScrollView(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.start, // Align content at the top
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Text(
-                'Enter your login details',
-                style: TextStyle(
-                  fontSize: 18.0,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey, // Set text color
-                ),
-              ),
-              SizedBox(height: 20), // Add space below the message
-
-              // Email Field with Icon
-              TextFormField(
-                controller: _usernameController,
-                decoration: InputDecoration(
-                  labelText: 'Email',
-                  prefixIcon: Icon(Icons.email),
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              SizedBox(height: 16),
-
-              // Password Field with Icon
-              TextFormField(
-                controller: _passwordController,
-                obscureText: true,
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  prefixIcon: Icon(Icons.lock),
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              SizedBox(height: 16),
-              // Submit Button with Icon
-              MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    login(_usernameController.text, _passwordController.text, context);
-                  },
-                  icon: Icon(Icons.login),
-                  label: Text('Login'),
-                  style: ElevatedButton.styleFrom(
-                    foregroundColor: Colors.white, backgroundColor: Colors.green, // Set text color
-                    minimumSize: Size(double.infinity, 50), // Set button width to the maximum
-                    elevation: 5, // Add elevation (shadow)
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10), // Set button border radius
+          physics: const BouncingScrollPhysics(),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 20.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                
+                const SizedBox(height: 20),
+                
+                // --- Fading Picture Section ---
+                FadeTransition(
+                  opacity: _imageFadeAnimation,
+                  child: SizedBox(
+                    height: 220,
+                    width: double.infinity,
+                    child: Image.network(
+                      // Replace this URL with your actual asset: Image.asset('assets/your_image.png')
+                      'https://img.freepik.com/free-vector/two-business-partners-working-office_74855-6620.jpg?w=740&t=st=1715000000~exp=1715003600~hmac=abcdef', 
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) {
+                        // Fallback icon if the network image fails to load
+                        return Icon(Icons.business_center, size: 150, color: _brandBlue.withOpacity(0.5));
+                      },
                     ),
                   ),
                 ),
-              ),
-              SizedBox(height: 16),
+                
+                const SizedBox(height: 30),
 
-              // Create Account Button with Icon
-              ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => SignUpForm()), // Navigate to HomePage on success
-                  );
-                },
-                icon: Icon(Icons.person_add),
-                label: Text('Create Account'),
-                style: ElevatedButton.styleFrom(
-                  foregroundColor: Colors.white, backgroundColor: Colors.blue, // Set text color
-                  minimumSize: Size(double.infinity, 50), // Set button width to the maximum
-                  elevation: 5, // Add elevation (shadow)
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10), // Set button border radius
+                // --- Welcome Text ---
+                const Text(
+                  'Welcome',
+                  style: TextStyle(
+                    fontSize: 38,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black,
+                  ),
+                ),
+                
+                const SizedBox(height: 10),
+                
+                const Text(
+                  'Sign In using Email and Password',
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: Colors.black87,
+                  ),
+                ),
+
+                const SizedBox(height: 40),
+
+                // --- Username Field ---
+                TextFormField(
+                  controller: _usernameController,
+                  style: TextStyle(color: _brandBlue, fontWeight: FontWeight.w600),
+                  decoration: InputDecoration(
+                    prefixIcon: Icon(Icons.person, color: _brandBlue),
+                    hintText: 'Username',
+                    hintStyle: TextStyle(color: _brandBlue.withOpacity(0.7), fontWeight: FontWeight.w600),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 18),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(30),
+                      borderSide: BorderSide(color: _brandBlue, width: 1.5),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(30),
+                      borderSide: BorderSide(color: _brandBlue, width: 2.0),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
+                // --- Password Field ---
+                TextFormField(
+                  controller: _passwordController,
+                  obscureText: true,
+                  style: TextStyle(color: _brandBlue, fontWeight: FontWeight.w600),
+                  decoration: InputDecoration(
+                    prefixIcon: Icon(Icons.lock, color: _brandBlue),
+                    hintText: 'Password',
+                    hintStyle: TextStyle(color: _brandBlue.withOpacity(0.7), fontWeight: FontWeight.w600),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 18),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(30),
+                      borderSide: BorderSide(color: _brandBlue, width: 1.5),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(30),
+                      borderSide: BorderSide(color: _brandBlue, width: 2.0),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 30),
+
+                // --- Login Now Button ---
+                SizedBox(
+                  width: double.infinity,
+                  height: 55,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      login(_usernameController.text, _passwordController.text, context);
+                    },
+                    icon: const Icon(Icons.login, color: Color(0xFF5E35B1)),
+                    label: const Text(
+                      'LOGIN NOW',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF5E35B1),
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFF3E5F5), // Light purple background
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 15),
+
+                // --- Create Account Button ---
+                SizedBox(
+                  width: double.infinity,
+                  height: 55,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => SignUpForm(),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.person_add, color: Color(0xFF5E35B1)),
+                    label: const Text(
+                      'CREATE ACCOUNT',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _brandBlue,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 30),
+
+                // --- Footer Text ---
+                GestureDetector(
+                  onTap: () {
+                    _showForgotPasswordDialog(context);
+                  },
+                  child: const Text(
+                    'Forgot Password? Troubleshoot',
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: Colors.black87,
+                    ),
+                  ),
+                ),
+                
+                const SizedBox(height: 20),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showForgotPasswordDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(
+            'Reset Password',
+            style: TextStyle(
+              color: _brandBlue,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.email,
+                size: 60,
+                color: Colors.blue[300],
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Enter your email address and we\'ll send you a link to reset your password.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                decoration: InputDecoration(
+                  labelText: 'Email',
+                  prefixIcon: const Icon(Icons.email),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
                   ),
                 ),
               ),
             ],
           ),
-        ),
-      ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Password reset link sent to your email!'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              },
+              child: const Text('Send Link'),
+            ),
+          ],
+        );
+      },
     );
   }
 }

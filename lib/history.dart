@@ -1,19 +1,99 @@
 import 'dart:convert';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:blue_thermal_printer/blue_thermal_printer.dart';
-import 'pages/widgets/historyOrder.dart'; // Assuming this file contains Order and Product classes
-import 'package:qr_flutter/qr_flutter.dart'; // Import for QR code generation
-import 'dart:ui' as ui; // For ImageByteFormat
-import 'package:image/image.dart' as img; // For image manipulation
-import 'dart:typed_data'; // For Uint8List
+import 'pages/widgets/historyOrder.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'dart:ui' as ui;
+import 'package:image/image.dart' as img;
+import 'dart:typed_data';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:csv/csv.dart';
+
+// ─────────────────────────────────────────────────────────────
+// CreditRecord model (must match sell_page.dart)
+// ─────────────────────────────────────────────────────────────
+class CreditRecord {
+  final String id;
+  final String debtorName;
+  final String debtorPhone;
+  final String debtorAddress;
+  final String? debtorEmail;
+  final double amount;
+  final DateTime expectedDate;
+  final DateTime createdAt;
+  final String orderNumber;
+  final String cashierName;
+  final List<Map<String, dynamic>> products;
+  final String? notes;
+  bool settled;
+  DateTime? settledAt;
+  double? amountPaid;
+
+  CreditRecord({
+    required this.id,
+    required this.debtorName,
+    required this.debtorPhone,
+    required this.debtorAddress,
+    this.debtorEmail,
+    required this.amount,
+    required this.expectedDate,
+    required this.createdAt,
+    required this.orderNumber,
+    required this.cashierName,
+    required this.products,
+    this.notes,
+    this.settled = false,
+    this.settledAt,
+    this.amountPaid,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'debtorName': debtorName,
+        'debtorPhone': debtorPhone,
+        'debtorAddress': debtorAddress,
+        'debtorEmail': debtorEmail,
+        'amount': amount,
+        'expectedDate': expectedDate.toIso8601String(),
+        'createdAt': createdAt.toIso8601String(),
+        'orderNumber': orderNumber,
+        'cashierName': cashierName,
+        'products': products,
+        'notes': notes,
+        'settled': settled,
+        'settledAt': settledAt?.toIso8601String(),
+        'amountPaid': amountPaid,
+      };
+
+  factory CreditRecord.fromJson(Map<String, dynamic> j) => CreditRecord(
+        id: j['id'],
+        debtorName: j['debtorName'],
+        debtorPhone: j['debtorPhone'],
+        debtorAddress: j['debtorAddress'],
+        debtorEmail: j['debtorEmail'],
+        amount: (j['amount'] as num).toDouble(),
+        expectedDate: DateTime.parse(j['expectedDate']),
+        createdAt: DateTime.parse(j['createdAt']),
+        orderNumber: j['orderNumber'],
+        cashierName: j['cashierName'],
+        products: List<Map<String, dynamic>>.from(j['products']),
+        notes: j['notes'],
+        settled: j['settled'] ?? false,
+        settledAt: j['settledAt'] != null
+            ? DateTime.parse(j['settledAt'])
+            : null,
+        amountPaid: j['amountPaid'] != null
+            ? (j['amountPaid'] as num).toDouble()
+            : null,
+      );
+}
 
 class ViewHistoryPage extends StatefulWidget {
   @override
@@ -21,41 +101,46 @@ class ViewHistoryPage extends StatefulWidget {
 }
 
 class _ViewHistoryPageState extends State<ViewHistoryPage> {
-  List<Order> allOrders = []; // Store all orders
-  List<Order> filteredOrders = []; // Store filtered orders for display
-  List<Order> draftOrders = []; // Store draft orders separately
-  
+  List<Order> allOrders = [];
+  List<Order> filteredOrders = [];
+  List<Order> draftOrders = [];
+
+  // Map orderNumber -> CreditRecord (unsettled + settled)
+  Map<String, CreditRecord> creditsMap = {};
+
   double totalRevenue = 0.0;
   double totalSales = 0.0;
-  double totalCredits = 0.0;
+  double totalCredits = 0.0; // unsettled outstanding only
   double totalRefunds = 0.0;
-  double totalDiscounts = 0.0; // New: Track total discounts
+  double totalDiscounts = 0.0;
   int totalOrders = 0;
   int completedSalesCount = 0;
   int creditCount = 0;
+  int overdueCreditCount = 0;
   int refundCount = 0;
   int draftCount = 0;
-  int discountedOrderCount = 0; // New: Track discounted orders count
-  
+  int discountedOrderCount = 0;
+  String shopId = '';
+  String password = '';
   bool isLoading = false;
   bool isDownloading = false;
+  bool zimraEnabled = false;
   BlueThermalPrinter bluetooth = BlueThermalPrinter.instance;
   List<BluetoothDevice> _devices = [];
   BluetoothDevice? _device;
   bool _connected = false;
-  String? _selectedFilter; // For filtering orders (All, Sales, Credits, Refunds, Drafts)
+  String? _selectedFilter;
   String currencySymbol = '\$';
   List<String> codes = [];
   bool _hideTotalOnHomepage = false;
 
-  // Filter options with new Discount filter
   final List<String> filterOptions = [
     'All Orders',
     'Completed Sales',
     'Credits',
     'Refunds',
     'Saved Orders',
-    'Discounted Orders' // New filter
+    'Discounted Orders'
   ];
 
   @override
@@ -65,22 +150,58 @@ class _ViewHistoryPageState extends State<ViewHistoryPage> {
     _loadOrders();
     _initBluetooth();
     loadCurrencySymbol();
+    _loadZimraStatus();
   }
 
-  // ==================== DISCOUNT HELPER METHODS ====================
-  
-  bool _hasDiscount(Order order) {
-    // Check if order has an applied discount
-    if (order.appliedDiscount != null) {
-      return true;
+  // ─────────────────────────────────────────────────────────
+  // HELPERS
+  // ─────────────────────────────────────────────────────────
+
+  bool _isCreditOrder(Order order) {
+    return creditsMap.containsKey(order.orderNumber);
+  }
+
+  bool _isSettledCredit(Order order) {
+    final c = creditsMap[order.orderNumber];
+    return c != null && c.settled;
+  }
+
+  bool _isOverdueCredit(Order order) {
+    final c = creditsMap[order.orderNumber];
+    if (c == null || c.settled) return false;
+    return DateTime.now().isAfter(c.expectedDate);
+  }
+
+  Future<void> _loadZimraStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      zimraEnabled = prefs.getBool('zimraEnabled') ?? false;
+    });
+  }
+
+  Future<void> _loadCreditsMap() async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList('credits') ?? [];
+    final Map<String, CreditRecord> map = {};
+    for (final s in list) {
+      try {
+        final c = CreditRecord.fromJson(jsonDecode(s));
+        map[c.orderNumber] = c;
+      } catch (e) {
+        print('Bad credit record: $e');
+      }
     }
-    
-    // Check if any product has a discount
+    creditsMap = map;
+  }
+
+  bool _hasDiscount(Order order) {
+    if (order.appliedDiscount != null) return true;
     for (var product in order.products) {
       if (product.discountAmount != null && product.discountAmount! > 0) {
         return true;
       }
-      if (product.discountPercentage != null && product.discountPercentage! > 0) {
+      if (product.discountPercentage != null &&
+          product.discountPercentage! > 0) {
         return true;
       }
     }
@@ -95,30 +216,27 @@ class _ViewHistoryPageState extends State<ViewHistoryPage> {
         return '$currencySymbol${order.appliedDiscount!.value.toStringAsFixed(2)} off';
       }
     }
-    
-    // Check if products have individual discounts
+
     double totalDiscount = 0;
     String discountType = '';
     for (var product in order.products) {
       if (product.discountAmount != null && product.discountAmount! > 0) {
         totalDiscount += product.discountAmount!;
         discountType = 'Price discount';
-      } else if (product.discountPercentage != null && product.discountPercentage! > 0) {
+      } else if (product.discountPercentage != null &&
+          product.discountPercentage! > 0) {
         discountType = '${product.discountPercentage}% off';
       }
     }
-    
     if (totalDiscount > 0) {
       return '$currencySymbol${totalDiscount.toStringAsFixed(2)} total discount';
     }
-    
     return discountType.isNotEmpty ? discountType : '';
   }
 
   double _getDiscountAmount(Order order) {
     if (order.appliedDiscount != null) {
       if (order.appliedDiscount!.type == DiscountType.Percentage) {
-        // Calculate percentage discount amount
         double originalTotal = 0;
         for (var product in order.products) {
           originalTotal += product.price * product.quantity;
@@ -128,8 +246,6 @@ class _ViewHistoryPageState extends State<ViewHistoryPage> {
         return order.appliedDiscount!.value;
       }
     }
-    
-    // Sum individual product discounts
     double totalDiscount = 0;
     for (var product in order.products) {
       if (product.discountAmount != null) {
@@ -146,8 +262,6 @@ class _ViewHistoryPageState extends State<ViewHistoryPage> {
     }
     return originalTotal;
   }
-
-  // ==================== EXISTING METHODS ====================
 
   Future<void> loadCurrencySymbol() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -167,8 +281,8 @@ class _ViewHistoryPageState extends State<ViewHistoryPage> {
   Future<void> _showPasswordDialog() async {
     TextEditingController passwordController = TextEditingController();
     int passwordAttempts = 0;
-
     bool passwordMatched = false;
+
     while (passwordAttempts < 3 && !passwordMatched) {
       passwordMatched = await showDialog<bool>(
             context: context,
@@ -197,9 +311,7 @@ class _ViewHistoryPageState extends State<ViewHistoryPage> {
                 actions: <Widget>[
                   TextButton(
                     child: Text('Cancel'),
-                    onPressed: () {
-                      Navigator.of(context).pop(false);
-                    },
+                    onPressed: () => Navigator.of(context).pop(false),
                   ),
                   TextButton(
                     child: Text('Submit'),
@@ -210,9 +322,7 @@ class _ViewHistoryPageState extends State<ViewHistoryPage> {
                       if (passwordController.text == savedPassword) {
                         Navigator.of(context).pop(true);
                       } else {
-                        setState(() {
-                          passwordAttempts++;
-                        });
+                        setState(() => passwordAttempts++);
                         if (passwordAttempts >= 3) {
                           Navigator.of(context).pop(false);
                         }
@@ -241,139 +351,159 @@ class _ViewHistoryPageState extends State<ViewHistoryPage> {
     await _autoConnectSavedPrinter();
   }
 
-  Future<bool> _isQuickSale(Order order) async {
+  // ─────────────────────────────────────────────────────────
+  // LOAD ORDERS (credits-aware)
+  // ─────────────────────────────────────────────────────────
+  Future<void> _loadOrders() async {
     final prefs = await SharedPreferences.getInstance();
-    List<String> codes =
-        (jsonDecode(prefs.getString('codes') ?? '[]') as List<dynamic>)
-            .cast<String>();
+    bool hideTotal = prefs.getBool('hideTotalOnHomepage') ?? false;
 
-    for (var product in order.products) {
-      if (product.code.isNotEmpty && !codes.contains(product.code)) {
-        return true;
+    await _loadCreditsMap();
+
+    List<String> ordersJson = prefs.getStringList('orders') ?? [];
+    List<Order> loadedOrders =
+        ordersJson.map((str) => Order.fromJson(json.decode(str))).toList();
+
+    List<String> draftOrdersJson = prefs.getStringList('draftOrders') ?? [];
+    List<Order> loadedDraftOrders =
+        draftOrdersJson.map((str) => Order.fromJson(json.decode(str))).toList();
+
+    double revenue = 0.0;
+    double sales = 0.0;
+    double credits = 0.0;
+    double refunds = 0.0;
+    double discounts = 0.0;
+    int salesCount = 0;
+    int creditsCount = 0;
+    int overdueCredits = 0;
+    int refundsCount = 0;
+    int discountCount = 0;
+
+    for (var order in loadedOrders) {
+      if (_hasDiscount(order)) {
+        discountCount++;
+        discounts += _getDiscountAmount(order);
+      }
+
+      final isCredit = _isCreditOrder(order);
+      final isSettled = _isSettledCredit(order);
+
+      if (order.isRefunded) {
+        refunds += order.refundAmount;
+        refundsCount++;
+      } else if (isCredit && !isSettled) {
+        // Unsettled credit — outstanding, NOT revenue, NOT sale
+        final c = creditsMap[order.orderNumber]!;
+        credits += c.amount;
+        creditsCount++;
+        if (DateTime.now().isAfter(c.expectedDate)) {
+          overdueCredits++;
+        }
+      } else {
+        // Regular sale OR settled credit → counts as sale
+        sales += order.total;
+        salesCount++;
+        revenue += order.total;
       }
     }
-    return false;
+
+    setState(() {
+      allOrders = loadedOrders;
+      draftOrders = loadedDraftOrders;
+      totalRevenue = revenue;
+      totalSales = sales;
+      totalCredits = credits;
+      totalRefunds = refunds;
+      totalDiscounts = discounts;
+      discountedOrderCount = discountCount;
+      completedSalesCount = salesCount;
+      creditCount = creditsCount;
+      overdueCreditCount = overdueCredits;
+      refundCount = refundsCount;
+      totalOrders = loadedOrders.length;
+      draftCount = loadedDraftOrders.length;
+      codes = (jsonDecode(prefs.getString('codes') ?? '[]') as List<dynamic>)
+          .cast<String>();
+      _hideTotalOnHomepage = hideTotal;
+      _applyFilter();
+    });
   }
 
-  /* LOAD ORDERS */
-/* LOAD ORDERS */
-Future<void> _loadOrders() async {
-  final prefs = await SharedPreferences.getInstance();
-  bool hideTotal = prefs.getBool('hideTotalOnHomepage') ?? false;
-  
-  // Load complete orders
-  List<String> ordersJson = prefs.getStringList('orders') ?? [];
-  List<Order> loadedOrders =
-      ordersJson.map((str) => Order.fromJson(json.decode(str))).toList();
-  
-  // Load draft orders
-  List<String> draftOrdersJson = prefs.getStringList('draftOrders') ?? [];
-  List<Order> loadedDraftOrders =
-      draftOrdersJson.map((str) => Order.fromJson(json.decode(str))).toList();
-
-  double revenue = 0.0;
-  double sales = 0.0;
-  double credits = 0.0;
-  double refunds = 0.0;
-  double discounts = 0.0;
-  int salesCount = 0;
-  int creditCount = 0;
-  int refundCount = 0;
-  int ordersCount = loadedOrders.length;
-  int discountCount = 0;
-
-  for (var order in loadedOrders) {
-    // Track discounts (regardless of order type)
-    if (_hasDiscount(order)) {
-      discountCount++;
-      discounts += _getDiscountAmount(order);
-    }
-    
-    // Categorize orders properly
-    if (order.isRefunded) {
-      // This is a refunded order - count it as refund
-      refunds += order.refundAmount;
-      refundCount++;
-      // Refunds are not revenue
-    } else if (order.total < 0) {
-      // This is a credit order (negative total)
-      credits += order.total.abs();
-      creditCount++;
-      // Credits are not revenue
-    } else {
-      // This is a regular sale (positive total)
-      sales += order.total;
-      salesCount++;
-      // Sales contribute to revenue
-      revenue += order.total;
+  void _applyFilter() {
+    if (_selectedFilter == null || _selectedFilter == 'All Orders') {
+      filteredOrders = List.from(allOrders);
+    } else if (_selectedFilter == 'Completed Sales') {
+      // Sales that are: not refunded AND (not a credit OR a settled credit)
+      filteredOrders = allOrders.where((order) {
+        if (order.isRefunded) return false;
+        if (_isCreditOrder(order)) return _isSettledCredit(order);
+        return true;
+      }).toList();
+    } else if (_selectedFilter == 'Credits') {
+      // Only unsettled credits
+      filteredOrders = allOrders
+          .where((order) => _isCreditOrder(order) && !_isSettledCredit(order))
+          .toList();
+    } else if (_selectedFilter == 'Refunds') {
+      filteredOrders = allOrders.where((order) => order.isRefunded).toList();
+    } else if (_selectedFilter == 'Saved Orders') {
+      filteredOrders = List.from(draftOrders);
+    } else if (_selectedFilter == 'Discounted Orders') {
+      filteredOrders = allOrders.where((order) => _hasDiscount(order)).toList();
     }
   }
 
-  setState(() {
-    allOrders = loadedOrders;
-    draftOrders = loadedDraftOrders;
-    totalRevenue = revenue;
-    totalSales = sales;
-    totalCredits = credits;
-    totalRefunds = refunds;
-    totalDiscounts = discounts;
-    discountedOrderCount = discountCount;
-    completedSalesCount = salesCount;
-    creditCount = creditCount;
-    refundCount = refundCount;
-    totalOrders = ordersCount;
-    draftCount = loadedDraftOrders.length;
-    codes = (jsonDecode(prefs.getString('codes') ?? '[]') as List<dynamic>)
-        .cast<String>();
-    _hideTotalOnHomepage = hideTotal;
-    
-    // Apply current filter
-    _applyFilter();
-  });
-}
-  // Apply filter based on selected option
-// Apply filter based on selected option
-void _applyFilter() {
-  if (_selectedFilter == null || _selectedFilter == 'All Orders') {
-    filteredOrders = List.from(allOrders);
-  } else if (_selectedFilter == 'Completed Sales') {
-    // Only regular sales (positive total, not refunded)
-    filteredOrders = allOrders.where((order) => 
-      !order.isRefunded && order.total > 0
-    ).toList();
-  } else if (_selectedFilter == 'Credits') {
-    // Only credit orders (negative total, not refunded)
-    filteredOrders = allOrders.where((order) => 
-      !order.isRefunded && order.total < 0
-    ).toList();
-  } else if (_selectedFilter == 'Refunds') {
-    // Only refunded orders
-    filteredOrders = allOrders.where((order) => 
-      order.isRefunded
-    ).toList();
-  } else if (_selectedFilter == 'Saved Orders') {
-    // Draft orders
-    filteredOrders = List.from(draftOrders);
-  } else if (_selectedFilter == 'Discounted Orders') {
-    // All orders that have discounts (regardless of type)
-    filteredOrders = allOrders.where((order) => 
-      _hasDiscount(order)
-    ).toList();
+  // ─────────────────────────────────────────────────────────
+  // SETTLE CREDIT
+  // ─────────────────────────────────────────────────────────
+  Future<void> _settleCredit(Order order) async {
+    final prefs = await SharedPreferences.getInstance();
+    final record = creditsMap[order.orderNumber];
+    if (record == null) return;
+
+    final list = prefs.getStringList('credits') ?? [];
+    final updated = <String>[];
+    for (final s in list) {
+      final c = CreditRecord.fromJson(jsonDecode(s));
+      if (c.orderNumber == record.orderNumber) {
+        c.settled = true;
+        c.settledAt = DateTime.now();
+        c.amountPaid = c.amount;
+        updated.add(jsonEncode(c.toJson()));
+      } else {
+        updated.add(s);
+      }
+    }
+    await prefs.setStringList('credits', updated);
+
+    await _loadOrders();
+
+    Fluttertoast.showToast(
+      msg: 'Credit ${order.orderNumber} settled — now counts as a sale',
+      toastLength: Toast.LENGTH_SHORT,
+      gravity: ToastGravity.CENTER,
+      backgroundColor: Colors.green,
+      textColor: Colors.white,
+      fontSize: 16.0,
+    );
   }
-}
-  /* MARK REFUNDED */
+
+  // ─────────────────────────────────────────────────────────
+  // MARK REFUNDED
+  // ─────────────────────────────────────────────────────────
   void _markAsRefunded(int index) async {
     Order order = filteredOrders[index];
-    int originalIndex = allOrders.indexWhere((o) => o.orderNumber == order.orderNumber);
-    
+    int originalIndex =
+        allOrders.indexWhere((o) => o.orderNumber == order.orderNumber);
+
     if (originalIndex != -1) {
       setState(() {
         allOrders[originalIndex].isRefunded = true;
-        allOrders[originalIndex].refundAmount = allOrders[originalIndex].total.abs();
+        allOrders[originalIndex].refundAmount =
+            allOrders[originalIndex].total.abs();
       });
-
       await _saveOrders();
-      await _loadOrders(); // Reload to recalculate totals
+      await _loadOrders();
 
       Fluttertoast.showToast(
           msg: 'Order marked as refunded',
@@ -392,33 +522,49 @@ void _applyFilter() {
     await prefs.setStringList('orders', ordersJson);
   }
 
-  // Enhanced method to download orders as Excel/CSV with clear categorization
+  // ─────────────────────────────────────────────────────────
+  // EXPORT
+  // ─────────────────────────────────────────────────────────
   Future<void> _downloadOrdersAsExcel() async {
-    setState(() {
-      isDownloading = true;
-    });
+    setState(() => isDownloading = true);
     final prefs = await SharedPreferences.getInstance();
 
     try {
       List<List<dynamic>> csvData = [];
 
-      // Add summary section
       csvData.add(['ORDER SUMMARY REPORT']);
-      csvData.add(['Generated on:', DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now())]);
+      csvData.add([
+        'Generated on:',
+        DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now())
+      ]);
       csvData.add(['Filter Applied:', _selectedFilter ?? 'All Orders']);
       csvData.add([]);
       csvData.add(['Summary Statistics']);
       csvData.add(['Total Orders (All):', totalOrders]);
       csvData.add(['Draft Orders:', draftCount]);
-      csvData.add(['Completed Sales:', '$completedSalesCount ($currencySymbol${totalSales.toStringAsFixed(2)})']);
-      csvData.add(['Credit Orders:', '$creditCount ($currencySymbol${totalCredits.toStringAsFixed(2)})']);
-      csvData.add(['Refunded Orders:', '$refundCount ($currencySymbol${totalRefunds.toStringAsFixed(2)})']);
-      csvData.add(['Discounted Orders:', '$discountedOrderCount ($currencySymbol${totalDiscounts.toStringAsFixed(2)} saved)']);
-      csvData.add(['Net Revenue:', '$currencySymbol${totalRevenue.toStringAsFixed(2)}']);
+      csvData.add([
+        'Completed Sales:',
+        '$completedSalesCount ($currencySymbol${totalSales.toStringAsFixed(2)})'
+      ]);
+      csvData.add([
+        'Unsettled Credits:',
+        '$creditCount ($currencySymbol${totalCredits.toStringAsFixed(2)}) — Overdue: $overdueCreditCount'
+      ]);
+      csvData.add([
+        'Refunded Orders:',
+        '$refundCount ($currencySymbol${totalRefunds.toStringAsFixed(2)})'
+      ]);
+      csvData.add([
+        'Discounted Orders:',
+        '$discountedOrderCount ($currencySymbol${totalDiscounts.toStringAsFixed(2)} saved)'
+      ]);
+      csvData.add([
+        'Net Revenue:',
+        '$currencySymbol${totalRevenue.toStringAsFixed(2)}'
+      ]);
       csvData.add([]);
       csvData.add(['DETAILED ORDER LIST']);
-      
-      // Add headers with discount columns
+
       csvData.add([
         'Order Number',
         'Date',
@@ -426,6 +572,8 @@ void _applyFilter() {
         'Customer Name',
         'Order Type',
         'Payment Status',
+        'Debtor Phone',
+        'Expected Date',
         'Products',
         'Original Amount',
         'Discount Applied',
@@ -437,36 +585,52 @@ void _applyFilter() {
         'Notes'
       ]);
 
-      // Add order data (export all orders, not just filtered)
       for (var order in allOrders) {
-        bool isQuickSale = order.products.any((product) =>
-            product.code.isEmpty || !codes.contains(product.code));
-        
+        bool isQuickSale = order.products.any(
+            (product) => product.code.isEmpty || !codes.contains(product.code));
+
         bool hasDiscount = _hasDiscount(order);
         String discountDisplay = _getDiscountDisplay(order);
         double discountAmount = _getDiscountAmount(order);
         double originalTotal = _getOriginalTotal(order);
 
-        String productsStr = order.products.map((p) => 
-          '${p.name} (Qty: ${p.quantity} x ${currencySymbol}${p.price.toStringAsFixed(2)} = ${currencySymbol}${(p.quantity * p.price).toStringAsFixed(2)}${p.discountAmount != null ? " - Discount: ${currencySymbol}${p.discountAmount!.toStringAsFixed(2)}" : ""}${p.discountPercentage != null ? " - ${p.discountPercentage}% off" : ""})'
-        ).join('\n');
+        String productsStr = order.products
+            .map((p) =>
+                '${p.name} (Qty: ${p.quantity} x ${currencySymbol}${p.price.toStringAsFixed(2)} = ${currencySymbol}${(p.quantity * p.price).toStringAsFixed(2)}${p.discountAmount != null ? " - Discount: ${currencySymbol}${p.discountAmount!.toStringAsFixed(2)}" : ""}${p.discountPercentage != null ? " - ${p.discountPercentage}% off" : ""})')
+            .join('\n');
 
+        final creditRec = creditsMap[order.orderNumber];
         String orderType = 'Sale';
         String paymentStatus = 'Paid';
+        String debtorPhone = '';
+        String expectedDateStr = '';
         String notes = '';
-        
+
         if (order.isRefunded) {
           orderType = 'Refund';
           paymentStatus = 'Refunded';
-          notes = 'Original amount: ${currencySymbol}${order.total.abs().toStringAsFixed(2)}';
-        } else if (order.total < 0) {
+          notes =
+              'Original amount: ${currencySymbol}${order.total.abs().toStringAsFixed(2)}';
+        } else if (creditRec != null && !creditRec.settled) {
           orderType = 'Credit';
-          paymentStatus = 'Unpaid/Credit';
-          notes = 'Customer owes: ${currencySymbol}${order.total.abs().toStringAsFixed(2)}';
+          paymentStatus = DateTime.now().isAfter(creditRec.expectedDate)
+              ? 'Unpaid / OVERDUE'
+              : 'Unpaid / Credit';
+          debtorPhone = creditRec.debtorPhone;
+          expectedDateStr = DateFormat('yyyy-MM-dd')
+              .format(creditRec.expectedDate);
+          notes =
+              'Debtor: ${creditRec.debtorName}, owes: ${currencySymbol}${creditRec.amount.toStringAsFixed(2)}';
+        } else if (creditRec != null && creditRec.settled) {
+          orderType = 'Credit (Settled)';
+          paymentStatus = 'Paid (was credit)';
+          notes =
+              'Settled on: ${creditRec.settledAt != null ? DateFormat('yyyy-MM-dd').format(creditRec.settledAt!) : 'N/A'}';
         } else if (hasDiscount) {
           orderType = 'Discounted Sale';
           paymentStatus = 'Paid (with discount)';
-          notes = 'Discount: $discountDisplay, Saved: ${currencySymbol}${discountAmount.toStringAsFixed(2)}';
+          notes =
+              'Discount: $discountDisplay, Saved: ${currencySymbol}${discountAmount.toStringAsFixed(2)}';
         }
 
         csvData.add([
@@ -476,6 +640,8 @@ void _applyFilter() {
           order.customerName ?? 'N/A',
           orderType,
           paymentStatus,
+          debtorPhone,
+          expectedDateStr,
           productsStr,
           originalTotal.toStringAsFixed(2),
           hasDiscount ? discountDisplay : 'No Discount',
@@ -488,50 +654,48 @@ void _applyFilter() {
         ]);
       }
 
-      // Add footer with totals
       csvData.add([]);
       csvData.add(['END OF REPORT']);
       csvData.add(['Total Records:', allOrders.length]);
-      csvData.add(['Total Discounts Given:', '$currencySymbol${totalDiscounts.toStringAsFixed(2)}']);
+      csvData.add([
+        'Total Discounts Given:',
+        '$currencySymbol${totalDiscounts.toStringAsFixed(2)}'
+      ]);
       csvData.add(['Number of Discounted Orders:', discountedOrderCount]);
 
       String csv = const ListToCsvConverter().convert(csvData);
 
-      // For Android, try to save to Downloads folder first
       String path;
       try {
         if (Platform.isAndroid) {
-          // Try to get the Downloads directory
           Directory? downloadsDir = await getExternalStorageDirectory();
           if (downloadsDir != null) {
-            // Create a custom directory for your app in Downloads
             final appDir = Directory('${downloadsDir.path}/TradeAppExports');
             if (!await appDir.exists()) {
               await appDir.create(recursive: true);
             }
-            path = '${appDir.path}/orders_report_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.csv';
+            path =
+                '${appDir.path}/orders_report_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.csv';
           } else {
-            // Fallback to temporary directory
             final tempDir = await getTemporaryDirectory();
-            path = '${tempDir.path}/orders_report_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.csv';
+            path =
+                '${tempDir.path}/orders_report_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.csv';
           }
         } else {
-          // For iOS, use documents directory
           final docDir = await getApplicationDocumentsDirectory();
-          path = '${docDir.path}/orders_report_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.csv';
+          path =
+              '${docDir.path}/orders_report_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.csv';
         }
       } catch (e) {
-        // Fallback to temporary directory if any error
         print("Error getting storage directory: $e");
         final tempDir = await getTemporaryDirectory();
-        path = '${tempDir.path}/orders_report_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.csv';
+        path =
+            '${tempDir.path}/orders_report_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.csv';
       }
-      
-      // Write file
+
       final file = File(path);
       await file.writeAsString(csv, encoding: utf8);
 
-      // Show success toast that file is saved
       Fluttertoast.showToast(
         msg: "File saved to: $path",
         toastLength: Toast.LENGTH_LONG,
@@ -541,19 +705,18 @@ void _applyFilter() {
         fontSize: 16.0,
       );
 
-      // Small delay to let user see the save message
       await Future.delayed(Duration(seconds: 2));
 
-      // Share the file
       await Share.shareXFiles(
         [XFile(path)],
-        text: 'Orders Report - Summary: $completedSalesCount Sales, $creditCount Credits, $refundCount Refunds, $discountedOrderCount Discounted',
-        subject: 'Orders Data Export - ${DateFormat('yyyy-MM-dd').format(DateTime.now())}',
+        text:
+            'Orders Report - $completedSalesCount Sales, $creditCount Credits, $refundCount Refunds, $discountedOrderCount Discounted',
+        subject:
+            'Orders Data Export - ${DateFormat('yyyy-MM-dd').format(DateTime.now())}',
       );
-      
-      // Clear orders after successful export
+
       await clearOrdersFromSharedPreferences(prefs);
-      
+
       setState(() {
         allOrders = [];
         filteredOrders = [];
@@ -565,6 +728,7 @@ void _applyFilter() {
         totalOrders = 0;
         completedSalesCount = 0;
         creditCount = 0;
+        overdueCreditCount = 0;
         refundCount = 0;
         discountedOrderCount = 0;
       });
@@ -577,7 +741,6 @@ void _applyFilter() {
         textColor: Colors.white,
         fontSize: 16.0,
       );
-
     } catch (e) {
       print("Error exporting orders: $e");
       Fluttertoast.showToast(
@@ -589,156 +752,192 @@ void _applyFilter() {
         fontSize: 16.0,
       );
     } finally {
-      setState(() {
-        isDownloading = false;
-      });
+      setState(() => isDownloading = false);
     }
   }
 
-Future<void> uploadSalesOnline(BuildContext context) async {
-  setState(() {
-    isLoading = true;
-  });
+  // ─────────────────────────────────────────────────────────
+  // UPLOAD
+  // ─────────────────────────────────────────────────────────
+  Future<void> uploadSalesOnline(BuildContext context) async {
+    setState(() => isLoading = true);
 
-  const String uploadUrl = "https://blueichor.org/uploadOffline3.php";
-  final prefs = await SharedPreferences.getInstance();
-  final String? shopId = prefs.getString('username');
+    final prefs = await SharedPreferences.getInstance();
+    final String? shopId = prefs.getString('username');
 
-  if (shopId == null) {
-    Fluttertoast.showToast(
-        msg: "Username not found.",
-        toastLength: Toast.LENGTH_SHORT,
-        gravity: ToastGravity.CENTER,
-        backgroundColor: Colors.red,
-        textColor: Colors.white,
-        fontSize: 16.0);
-    setState(() {
-      isLoading = false;
-    });
-    return;
-  }
-
-  List<Map<String, dynamic>> ordersData = [];
-  List<Order> ordersToKeep = [];
-
-  for (var order in allOrders) {
-    // Only upload non-refunded orders with positive total (regular sales)
-    // BUT preserve discount information for these orders
-    if (!order.isRefunded && order.total > 0) {
-      // Create a copy of the order data with all fields including discount
-      Map<String, dynamic> orderJson = order.toJson();
-      
-      // Ensure discount fields are included
-      // The order.toJson() should already include discount data if your models are updated
-      // But let's make sure they're explicitly set
-      orderJson['discount'] = _getDiscountAmount(order);
-      orderJson['original_total'] = _getOriginalTotal(order);
-      orderJson['has_discount'] = _hasDiscount(order);
-      
-      ordersData.add(orderJson);
-    } else {
-      // Keep refunded and credit orders locally
-      ordersToKeep.add(order);
+    if (shopId == null) {
+      Fluttertoast.showToast(
+          msg: "Username not found.",
+          toastLength: Toast.LENGTH_SHORT,
+          gravity: ToastGravity.CENTER,
+          backgroundColor: Colors.red,
+          textColor: Colors.white,
+          fontSize: 16.0);
+      setState(() => isLoading = false);
+      return;
     }
-  }
 
-  // If there are no orders to upload, show message
-  if (ordersData.isEmpty) {
-    Fluttertoast.showToast(
-        msg: "No orders to upload.",
-        toastLength: Toast.LENGTH_SHORT,
-        gravity: ToastGravity.CENTER,
-        backgroundColor: Colors.orange,
-        textColor: Colors.white,
-        fontSize: 16.0);
-    setState(() {
-      isLoading = false;
-    });
-    return;
-  }
+    bool zimraEnabled = prefs.getBool('zimraEnabled') ?? false;
+    String uploadUrl = zimraEnabled
+        ? "https://blueichor.org/fiscalize.php"
+        : "https://blueichor.org/uploadOffline3.php";
 
-  try {
-    print('Uploading ${ordersData.length} orders with discount data...');
-    
-    var response = await http.post(
-      Uri.parse(uploadUrl),
-      headers: {"Content-Type": "application/json"},
-      body: jsonEncode({
-        'username': shopId,
-        'orders': ordersData,
-      }),
-    );
+    List<Map<String, dynamic>> ordersData = [];
+    List<Order> ordersToKeep = [];
 
-    print('Upload response status: ${response.statusCode}');
-    print('Upload response body: ${response.body}');
+    for (var order in allOrders) {
+      final isCredit = _isCreditOrder(order);
+      final isSettled = _isSettledCredit(order);
 
-    if (response.statusCode == 200) {
-      var jsonResponse = jsonDecode(response.body);
-      if (jsonResponse['success']) {
-        // Keep non-uploaded orders (refunds, credits) in local storage
-        await clearOrdersFromSharedPreferences(prefs);
-        
-        // Save the kept orders back to SharedPreferences
-        if (ordersToKeep.isNotEmpty) {
-          List<String> ordersJsonToKeep = 
-              ordersToKeep.map((order) => jsonEncode(order.toJson())).toList();
-          await prefs.setStringList('orders', ordersJsonToKeep);
+      // Only upload regular sales or settled credits that are not refunded
+      if (!order.isRefunded && (!isCredit || isSettled)) {
+        Map<String, dynamic> orderJson = order.toJson();
+        orderJson['discount'] = _getDiscountAmount(order);
+        orderJson['original_total'] = _getOriginalTotal(order);
+        orderJson['has_discount'] = _hasDiscount(order);
+        ordersData.add(orderJson);
+      } else {
+        ordersToKeep.add(order);
+      }
+    }
+
+    if (ordersData.isEmpty) {
+      Fluttertoast.showToast(
+          msg: "No orders to upload.",
+          toastLength: Toast.LENGTH_SHORT,
+          gravity: ToastGravity.CENTER,
+          backgroundColor: Colors.orange,
+          textColor: Colors.white,
+          fontSize: 16.0);
+      setState(() => isLoading = false);
+      return;
+    }
+
+    try {
+      var response = await http.post(
+        Uri.parse(uploadUrl),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          'username': shopId,
+          'orders': ordersData,
+          'zimra_enabled': zimraEnabled,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        var jsonResponse = jsonDecode(response.body);
+        if (jsonResponse['success']) {
+          await clearOrdersFromSharedPreferences(prefs);
+
+          if (ordersToKeep.isNotEmpty) {
+            List<String> ordersJsonToKeep = ordersToKeep
+                .map((order) => jsonEncode(order.toJson()))
+                .toList();
+            await prefs.setStringList('orders', ordersJsonToKeep);
+          }
+
+          setState(() {
+            allOrders = ordersToKeep;
+            _applyFilter();
+            totalRevenue = 0.0;
+            totalSales = 0.0;
+            totalCredits = 0.0;
+            totalRefunds = 0.0;
+            totalDiscounts = 0.0;
+            totalOrders = ordersToKeep.length;
+            discountedOrderCount = 0;
+          });
+
+          String message = zimraEnabled
+              ? "Upload successful! ${ordersData.length} orders sent to ZIMRA."
+              : "Upload successful! ${ordersData.length} orders saved to database.";
+
+          Fluttertoast.showToast(
+              msg: message,
+              toastLength: Toast.LENGTH_SHORT,
+              gravity: ToastGravity.CENTER,
+              backgroundColor: Colors.green,
+              textColor: Colors.white,
+              fontSize: 16.0);
+        } else {
+          Fluttertoast.showToast(
+              msg:
+                  "Upload failed: ${jsonResponse['message'] ?? 'Unknown error'}",
+              toastLength: Toast.LENGTH_SHORT,
+              gravity: ToastGravity.CENTER,
+              backgroundColor: Colors.red,
+              textColor: Colors.white,
+              fontSize: 16.0);
         }
-
-        setState(() {
-          allOrders = ordersToKeep;
-          _applyFilter();
-          totalRevenue = 0.0;
-          totalSales = 0.0;
-          totalCredits = 0.0;
-          totalRefunds = 0.0;
-          totalDiscounts = 0.0;
-          totalOrders = ordersToKeep.length;
-          discountedOrderCount = 0;
-        });
-
-        Fluttertoast.showToast(
-            msg: "Upload successful! ${ordersData.length} orders uploaded with discount info.",
-            toastLength: Toast.LENGTH_SHORT,
-            gravity: ToastGravity.CENTER,
-            backgroundColor: Colors.green,
-            textColor: Colors.white,
-            fontSize: 16.0);
       } else {
         Fluttertoast.showToast(
-            msg: "Upload failed: ${jsonResponse['message'] ?? 'Unknown error'}",
+            msg: "Server error: ${response.statusCode}",
             toastLength: Toast.LENGTH_SHORT,
             gravity: ToastGravity.CENTER,
             backgroundColor: Colors.red,
             textColor: Colors.white,
             fontSize: 16.0);
       }
-    } else {
+    } catch (e) {
       Fluttertoast.showToast(
-          msg: "Server error: ${response.statusCode}",
+          msg: "Error uploading orders: $e",
           toastLength: Toast.LENGTH_SHORT,
           gravity: ToastGravity.CENTER,
           backgroundColor: Colors.red,
           textColor: Colors.white,
           fontSize: 16.0);
+    } finally {
+      setState(() => isLoading = false);
     }
-  } catch (e) {
-    print("Error uploading orders: $e");
-    Fluttertoast.showToast(
-        msg: "Error uploading orders: $e",
-        toastLength: Toast.LENGTH_SHORT,
-        gravity: ToastGravity.CENTER,
-        backgroundColor: Colors.red,
-        textColor: Colors.white,
-        fontSize: 16.0);
-  } finally {
-    setState(() {
-      isLoading = false;
-    });
+
+    _refreshData();
   }
-}
+
   Future<void> clearOrdersFromSharedPreferences(SharedPreferences prefs) async {
     await prefs.remove('orders');
+  }
+
+  Future<void> _refreshData() async {
+    final prefs = await SharedPreferences.getInstance();
+    shopId = prefs.getString('username') ?? '';
+    password = prefs.getString('password') ?? '';
+    await _loadOrders();
+    setState(() => isLoading = true);
+
+    var connectivityResult = await Connectivity().checkConnectivity();
+    if (connectivityResult != ConnectivityResult.none) {
+      try {
+        var response = await http.post(
+          Uri.parse('https://blueichor.org/log2.php'),
+          body: {'username': shopId, 'password': password},
+        );
+
+        if (response.statusCode == 200) {
+          var jsondata = json.decode(response.body);
+          if (jsondata["success"]) {
+            final prefs = await SharedPreferences.getInstance();
+            prefs.setString('categories', json.encode(jsondata['categories']));
+            prefs.setString('products', json.encode(jsondata["products"]));
+            prefs.setString('prices', json.encode(jsondata["prices"]));
+            prefs.setString('codes', json.encode(jsondata["codes"]));
+            prefs.setString('measure', json.encode(jsondata["measure"]));
+            prefs.setString('quantities', json.encode(jsondata["quantities"]));
+          }
+        }
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text(
+                  'Failed to refresh data make sure internet connection is available')),
+        );
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No internet connection')),
+      );
+    }
+
+    setState(() => isLoading = false);
   }
 
   Future<void> _printLogo() async {
@@ -802,8 +1001,12 @@ Future<void> uploadSalesOnline(BuildContext context) async {
       bluetooth.printCustom('Products:', 1, 0);
       bluetooth.printNewLine();
 
-      List<String> codes = (jsonDecode(prefs.getString('codes1') ?? '[]') as List<dynamic>).cast<String>();
-      List<String> measures = (jsonDecode(prefs.getString('measure') ?? '[]') as List<dynamic>).cast<String>();
+      List<String> codes =
+          (jsonDecode(prefs.getString('codes1') ?? '[]') as List<dynamic>)
+              .cast<String>();
+      List<String> measures =
+          (jsonDecode(prefs.getString('measure') ?? '[]') as List<dynamic>)
+              .cast<String>();
 
       for (int i = 0; i < order.products.length; i++) {
         Product product = order.products[i];
@@ -815,11 +1018,12 @@ Future<void> uploadSalesOnline(BuildContext context) async {
           quantityText += ' ${measures[index]}';
         }
 
-        // Show discount info if applicable
         String discountText = '';
         if (product.discountAmount != null && product.discountAmount! > 0) {
-          discountText = ' (Disc: $currencySymbol${product.discountAmount!.toStringAsFixed(2)})';
-        } else if (product.discountPercentage != null && product.discountPercentage! > 0) {
+          discountText =
+              ' (Disc: $currencySymbol${product.discountAmount!.toStringAsFixed(2)})';
+        } else if (product.discountPercentage != null &&
+            product.discountPercentage! > 0) {
           discountText = ' (${product.discountPercentage}% off)';
         }
 
@@ -832,32 +1036,34 @@ Future<void> uploadSalesOnline(BuildContext context) async {
 
       bluetooth.printNewLine();
       bluetooth.printCustom('-------------------------------', 1, 0);
-      
-      // Show discount info if order has discount
+
       if (_hasDiscount(order)) {
         double originalTotal = _getOriginalTotal(order);
         double discountAmount = _getDiscountAmount(order);
-        bluetooth.printCustom('Original Total: $currencySymbol${originalTotal.toStringAsFixed(2)}', 1, 0);
-        bluetooth.printCustom('Discount: -$currencySymbol${discountAmount.toStringAsFixed(2)}', 1, 0);
+        bluetooth.printCustom(
+            'Original Total: $currencySymbol${originalTotal.toStringAsFixed(2)}',
+            1,
+            0);
+        bluetooth.printCustom(
+            'Discount: -$currencySymbol${discountAmount.toStringAsFixed(2)}',
+            1,
+            0);
         bluetooth.printCustom('-------------------------------', 1, 0);
       }
-      
-      bluetooth.printCustom('Total: $currencySymbol${order.total.toStringAsFixed(2)}', 1, 1);
+
+      bluetooth.printCustom(
+          'Total: $currencySymbol${order.total.toStringAsFixed(2)}', 1, 1);
       bluetooth.printNewLine();
       bluetooth.printNewLine();
 
       await Future.delayed(Duration(milliseconds: 500));
 
       if (printQRCode) {
-        Map<String, dynamic> qrData = {
-          "invoice": order.orderNumber,
-        };
-
+        Map<String, dynamic> qrData = {"invoice": order.orderNumber};
         String qrJson = jsonEncode(qrData);
 
         try {
           const int qrImageSourceSize = 384;
-
           final qrPainter = QrPainter(
             data: qrJson,
             version: QrVersions.auto,
@@ -865,17 +1071,19 @@ Future<void> uploadSalesOnline(BuildContext context) async {
             color: Colors.black,
             emptyColor: Colors.white,
           );
-
-          final ui.Image qrImage = await qrPainter.toImage(qrImageSourceSize.toDouble());
+          final ui.Image qrImage =
+              await qrPainter.toImage(qrImageSourceSize.toDouble());
           final ByteData? byteData =
               await qrImage.toByteData(format: ui.ImageByteFormat.png);
           final Uint8List pngBytes = byteData!.buffer.asUint8List();
 
           final img.Image? decodedImage = img.decodeImage(pngBytes);
           if (decodedImage != null) {
-            final img.Image resizedImage = img.copyResize(decodedImage, width: 250);
+            final img.Image resizedImage =
+                img.copyResize(decodedImage, width: 250);
             final img.Image grayscaleImage = img.grayscale(resizedImage);
-            final Uint8List bmpBytes = Uint8List.fromList(img.encodeBmp(grayscaleImage));
+            final Uint8List bmpBytes =
+                Uint8List.fromList(img.encodeBmp(grayscaleImage));
 
             bluetooth.printImageBytes(bmpBytes);
             bluetooth.printNewLine();
@@ -922,14 +1130,38 @@ Future<void> uploadSalesOnline(BuildContext context) async {
     }
   }
 
-  // ==================== BUILD METHODS ====================
-
+  // ─────────────────────────────────────────────────────────
+  // BUILD
+  // ─────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text('Order History'),
         automaticallyImplyLeading: false,
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 16.0),
+            child: Row(
+              children: [
+                Icon(
+                  zimraEnabled ? Icons.check_circle : Icons.cancel,
+                  color: zimraEnabled ? Colors.green : Colors.grey,
+                  size: 20,
+                ),
+                SizedBox(width: 4),
+                Text(
+                  zimraEnabled ? 'ZIMRA' : 'POS',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: zimraEnabled ? Colors.green : Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -948,7 +1180,44 @@ Future<void> uploadSalesOnline(BuildContext context) async {
             child: _buildSalesSummaryCard(),
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+            child: Container(
+              padding: EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+              decoration: BoxDecoration(
+                color: zimraEnabled ? Colors.green[50] : Colors.grey[100],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: zimraEnabled ? Colors.green : Colors.grey[300]!,
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    zimraEnabled ? Icons.check_circle : Icons.cancel,
+                    color: zimraEnabled ? Colors.green : Colors.grey[600],
+                    size: 16,
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    zimraEnabled
+                        ? 'ZIMRA Integration: ON - Receipts will be fiscalized'
+                        : 'ZIMRA Integration: OFF - Receipts will be saved to database only',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: zimraEnabled ? Colors.green[700] : Colors.grey[600],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Padding(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
             child: Container(
               padding: EdgeInsets.symmetric(horizontal: 12),
               decoration: BoxDecoration(
@@ -962,7 +1231,6 @@ Future<void> uploadSalesOnline(BuildContext context) async {
                 underline: SizedBox(),
                 items: filterOptions.map((String value) {
                   String displayText = value;
-                  // Add counts to dropdown items
                   if (value == 'All Orders') {
                     displayText = '$value (${allOrders.length})';
                   } else if (value == 'Completed Sales') {
@@ -976,7 +1244,6 @@ Future<void> uploadSalesOnline(BuildContext context) async {
                   } else if (value == 'Discounted Orders') {
                     displayText = '$value ($discountedOrderCount)';
                   }
-                  
                   return DropdownMenuItem<String>(
                     value: value,
                     child: Text(displayText),
@@ -991,7 +1258,6 @@ Future<void> uploadSalesOnline(BuildContext context) async {
               ),
             ),
           ),
-          // Summary of current filter
           if (_selectedFilter != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16.0),
@@ -1020,29 +1286,31 @@ Future<void> uploadSalesOnline(BuildContext context) async {
       floatingActionButton: Column(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          FloatingActionButton(
-            onPressed: isDownloading || allOrders.isEmpty
-                ? null
-                : _downloadOrdersAsExcel,
-            tooltip: 'Download Orders as Excel',
-            heroTag: 'download',
-            backgroundColor: Colors.blue,
-            child: isDownloading
-                ? CircularProgressIndicator(
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                  )
-                : Icon(Icons.download),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            margin: EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(
+              color: Colors.black87,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              zimraEnabled ? 'Uploading to ZIMRA' : 'Uploading to Database',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
           ),
-          SizedBox(height: 16),
           FloatingActionButton(
             onPressed: isLoading
                 ? null
                 : () async {
                     await uploadSalesOnline(context);
                   },
-            tooltip: 'Upload Sales Online',
+            tooltip: zimraEnabled ? 'Upload Sales to ZIMRA' : 'Upload Sales Online',
             heroTag: 'upload',
-            backgroundColor: Colors.green,
+            backgroundColor: zimraEnabled ? Colors.green : Colors.blue,
             child: isLoading
                 ? CircularProgressIndicator(
                     valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
@@ -1101,21 +1369,54 @@ Future<void> uploadSalesOnline(BuildContext context) async {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                _buildSummaryItem('Sales', totalSales, completedSalesCount, Colors.green),
-                _buildSummaryItem('Credits', totalCredits, creditCount, Colors.orange),
-                _buildSummaryItem('Refunds', totalRefunds, refundCount, Colors.red),
+                _buildSummaryItem(
+                    'Sales', totalSales, completedSalesCount, Colors.green),
+                _buildSummaryItem(
+                    'Credits', totalCredits, creditCount, Colors.orange),
+                _buildSummaryItem(
+                    'Refunds', totalRefunds, refundCount, Colors.red),
                 _buildSummaryItem('Drafts', 0, draftCount, Colors.blue),
               ],
             ),
-            // Add discount summary row
+            // Overdue warning
+            if (overdueCreditCount > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 6.0),
+                child: Container(
+                  padding:
+                      EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.red[50],
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.red[200]!),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.warning_amber,
+                          color: Colors.red, size: 16),
+                      SizedBox(width: 6),
+                      Text(
+                        '$overdueCreditCount credit(s) overdue',
+                        style: TextStyle(
+                            color: Colors.red,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             if (discountedOrderCount > 0)
               Padding(
                 padding: const EdgeInsets.only(top: 8.0),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    _buildSummaryItem('Discounted Orders', 0, discountedOrderCount, Colors.purple),
-                    _buildSummaryItem('Total Saved', totalDiscounts, 0, Colors.purple),
+                    _buildSummaryItem('Discounted Orders', 0,
+                        discountedOrderCount, Colors.purple),
+                    _buildSummaryItem(
+                        'Total Saved', totalDiscounts, 0, Colors.purple),
                   ],
                 ),
               ),
@@ -1125,11 +1426,11 @@ Future<void> uploadSalesOnline(BuildContext context) async {
     );
   }
 
-  Widget _buildSummaryItem(String label, double amount, int count, Color color) {
+  Widget _buildSummaryItem(
+      String label, double amount, int count, Color color) {
     return Column(
       children: [
-        Text(label,
-            style: TextStyle(fontSize: 12, color: color)),
+        Text(label, style: TextStyle(fontSize: 12, color: color)),
         if (amount > 0)
           Text('$currencySymbol${amount.toStringAsFixed(2)}',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
@@ -1140,25 +1441,36 @@ Future<void> uploadSalesOnline(BuildContext context) async {
   }
 
   Widget _buildOrderItem(Order order, int index) {
-    bool isQuickSale = order.products.any((product) =>
-        product.code.isEmpty || !codes.contains(product.code));
+    bool isQuickSale = order.products.any(
+        (product) => product.code.isEmpty || !codes.contains(product.code));
     bool hasDiscount = _hasDiscount(order);
     String discountDisplay = _getDiscountDisplay(order);
     double discountAmount = _getDiscountAmount(order);
     double originalTotal = _getOriginalTotal(order);
-    
+
+    final creditRec = creditsMap[order.orderNumber];
+    final isCredit = creditRec != null && !creditRec.settled;
+    final isSettledCredit = creditRec != null && creditRec.settled;
+    final isOverdue = creditRec != null &&
+        !creditRec.settled &&
+        DateTime.now().isAfter(creditRec.expectedDate);
+
     Color backgroundColor = Colors.white;
     String statusText = '';
     Color statusColor = Colors.green;
-    
+
     if (order.isRefunded) {
       backgroundColor = Colors.grey[200]!;
       statusText = 'REFUNDED';
       statusColor = Colors.grey[600]!;
-    } else if (order.total < 0) {
-      backgroundColor = Colors.red[100]!;
-      statusText = 'CREDIT';
-      statusColor = Colors.red;
+    } else if (isCredit) {
+      backgroundColor = isOverdue ? Colors.red[50]! : Colors.orange[50]!;
+      statusText = isOverdue ? 'CREDIT • OVERDUE' : 'CREDIT';
+      statusColor = isOverdue ? Colors.red : Colors.orange;
+    } else if (isSettledCredit) {
+      backgroundColor = Colors.green[50]!;
+      statusText = 'CREDIT • SETTLED';
+      statusColor = Colors.green;
     } else if (isQuickSale) {
       backgroundColor = Colors.orange[100]!;
       statusText = 'QUICK SALE';
@@ -1172,14 +1484,11 @@ Future<void> uploadSalesOnline(BuildContext context) async {
       statusColor = Colors.green;
     }
 
-    String titleText = order.total >= 0 ? 'Order Total' : 'Credits';
-
     return Card(
       color: backgroundColor,
       child: Stack(
         children: [
-          // Status badge
-          if (isQuickSale || order.isRefunded || order.total < 0 || hasDiscount)
+          if (statusText.isNotEmpty)
             Positioned(
               top: 8,
               right: 8,
@@ -1204,16 +1513,18 @@ Future<void> uploadSalesOnline(BuildContext context) async {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _hideTotalOnHomepage && order.total >= 0
-                      ? '$titleText: XX'
-                      : '$titleText: $currencySymbol${order.total.abs().toStringAsFixed(2)}',
+                  _hideTotalOnHomepage && !isCredit
+                      ? 'Total: XX'
+                      : (isCredit
+                          ? 'Credit: $currencySymbol${creditRec!.amount.toStringAsFixed(2)}'
+                          : 'Total: $currencySymbol${order.total.abs().toStringAsFixed(2)}'),
                   style: TextStyle(
-                    fontWeight: (order.total >= 0 && !order.isRefunded) 
-                        ? FontWeight.normal 
-                        : FontWeight.bold,
+                    fontWeight: (isCredit || order.isRefunded)
+                        ? FontWeight.bold
+                        : FontWeight.normal,
                   ),
                 ),
-                if (hasDiscount)
+                if (hasDiscount && !isCredit)
                   Text(
                     'Discounted: $discountDisplay',
                     style: TextStyle(
@@ -1222,7 +1533,7 @@ Future<void> uploadSalesOnline(BuildContext context) async {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                if (hasDiscount && !_hideTotalOnHomepage)
+                if (hasDiscount && !_hideTotalOnHomepage && !isCredit)
                   Text(
                     'Original: $currencySymbol${originalTotal.toStringAsFixed(2)}',
                     style: TextStyle(
@@ -1231,15 +1542,24 @@ Future<void> uploadSalesOnline(BuildContext context) async {
                       decoration: TextDecoration.lineThrough,
                     ),
                   ),
+                if (isCredit)
+                  Text(
+                    'Due: ${creditRec.expectedDate.day}/${creditRec.expectedDate.month}/${creditRec.expectedDate.year}'
+                    '${isOverdue ? "  •  OVERDUE" : ""}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isOverdue ? Colors.red : Colors.orange[800],
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
               ],
             ),
             subtitle: Text(
-              'Order ID: ${order.orderNumber}\n'
-              '${_selectedFilter == 'Saved Orders' ? 'Customer: ${order.customerName ?? 'N/A'}\n' : ''}'
-              'Cashier: ${order.cashierName ?? 'N/A'}'
-            ),
+                'Order ID: ${order.orderNumber}\n'
+                '${_selectedFilter == 'Saved Orders' ? 'Customer: ${order.customerName ?? 'N/A'}\n' : ''}'
+                'Cashier: ${order.cashierName ?? 'N/A'}'
+                '${isCredit ? '\nDebtor: ${creditRec!.debtorName} • ${creditRec.debtorPhone}' : ''}'),
             children: [
-              // Order Details
               ListTile(
                 title: Text('Order Details'),
                 subtitle: Column(
@@ -1248,6 +1568,77 @@ Future<void> uploadSalesOnline(BuildContext context) async {
                     Text('Order ID: ${order.orderNumber}'),
                     Text('Customer: ${order.customerName ?? 'N/A'}'),
                     Text('Cashier: ${order.cashierName ?? 'N/A'}'),
+                    if (isCredit) ...[
+                      SizedBox(height: 6),
+                      Container(
+                        padding: EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: isOverdue
+                              ? Colors.red[50]
+                              : Colors.orange[50],
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: isOverdue
+                                ? Colors.red[200]!
+                                : Colors.orange[200]!,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Credit Details',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: isOverdue
+                                        ? Colors.red
+                                        : Colors.orange[800])),
+                            SizedBox(height: 4),
+                            Text('Debtor: ${creditRec.debtorName}'),
+                            Text('Phone: ${creditRec.debtorPhone}'),
+                            Text('Address: ${creditRec.debtorAddress}'),
+                            if (creditRec.debtorEmail != null &&
+                                creditRec.debtorEmail!.isNotEmpty)
+                              Text('Email: ${creditRec.debtorEmail}'),
+                            Text(
+                                'Created: ${DateFormat('yyyy-MM-dd HH:mm').format(creditRec.createdAt)}'),
+                            Text(
+                                'Expected: ${DateFormat('yyyy-MM-dd').format(creditRec.expectedDate)}'
+                                '${isOverdue ? "  (OVERDUE)" : ""}',
+                                style: TextStyle(
+                                    color: isOverdue ? Colors.red : null,
+                                    fontWeight: FontWeight.bold)),
+                            if (creditRec.notes != null &&
+                                creditRec.notes!.isNotEmpty)
+                              Text('Notes: ${creditRec.notes}'),
+                          ],
+                        ),
+                      ),
+                    ],
+                    if (isSettledCredit) ...[
+                      SizedBox(height: 6),
+                      Container(
+                        padding: EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.green[50],
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.green[200]!),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Settled Credit',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.green[800])),
+                            Text('Debtor: ${creditRec.debtorName}'),
+                            Text('Phone: ${creditRec.debtorPhone}'),
+                            if (creditRec.settledAt != null)
+                              Text(
+                                  'Settled: ${DateFormat('yyyy-MM-dd HH:mm').format(creditRec.settledAt!)}'),
+                          ],
+                        ),
+                      ),
+                    ],
                     if (hasDiscount) ...[
                       SizedBox(height: 4),
                       Text(
@@ -1265,7 +1656,7 @@ Future<void> uploadSalesOnline(BuildContext context) async {
                         ),
                       ),
                       Text(
-                        'Discounted Total: $currencySymbol${order.total.abs().toStringAsFixed(2)}',
+                        'Final Total: $currencySymbol${order.total.abs().toStringAsFixed(2)}',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           color: Colors.green,
@@ -1282,25 +1673,30 @@ Future<void> uploadSalesOnline(BuildContext context) async {
                   ],
                 ),
               ),
-              
-              // Products List with Discount Info
+
               ...order.products.map((product) {
                 String discountInfo = '';
                 String discountedPriceText = '';
-                
-                if (product.discountAmount != null && product.discountAmount! > 0) {
-                  discountInfo = 'Discount: $currencySymbol${product.discountAmount!.toStringAsFixed(2)}';
+
+                if (product.discountAmount != null &&
+                    product.discountAmount! > 0) {
+                  discountInfo =
+                      'Discount: $currencySymbol${product.discountAmount!.toStringAsFixed(2)}';
                   double discountedTotal = product.getTotalWithDiscount();
-                  discountedPriceText = 'Discounted: $currencySymbol${discountedTotal.toStringAsFixed(2)}';
-                } else if (product.discountPercentage != null && product.discountPercentage! > 0) {
+                  discountedPriceText =
+                      'Discounted: $currencySymbol${discountedTotal.toStringAsFixed(2)}';
+                } else if (product.discountPercentage != null &&
+                    product.discountPercentage! > 0) {
                   discountInfo = 'Discount: ${product.discountPercentage!}%';
                   double discountedTotal = product.getTotalWithDiscount();
-                  discountedPriceText = 'Discounted: $currencySymbol${discountedTotal.toStringAsFixed(2)}';
+                  discountedPriceText =
+                      'Discounted: $currencySymbol${discountedTotal.toStringAsFixed(2)}';
                 }
-                
+
                 return ListTile(
                   title: Text(product.name),
-                  subtitle: product.discountAmount != null || product.discountPercentage != null
+                  subtitle: product.discountAmount != null ||
+                          product.discountPercentage != null
                       ? Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -1332,42 +1728,48 @@ Future<void> uploadSalesOnline(BuildContext context) async {
                       : null,
                   trailing: Text(
                     '$currencySymbol${product.price.toStringAsFixed(2)} x ${product.quantity} = $currencySymbol${(product.price * product.quantity).toStringAsFixed(2)}',
-                    style: TextStyle(
-                      fontSize: 12,
-                    ),
+                    style: TextStyle(fontSize: 12),
                   ),
                 );
               }).toList(),
-              
-              // Refund info
+
               if (order.isRefunded)
                 ListTile(
                   title: Text("Refunded", style: TextStyle(color: Colors.red)),
                   subtitle: Text(
                       "Refund Amount: $currencySymbol${order.refundAmount.toStringAsFixed(2)}"),
                 ),
-                
+
               // Credit actions
-              if (order.total < 0 && !order.isRefunded)
+              if (isCredit)
                 ListTile(
                   title: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
-                      ElevatedButton(
-                        onPressed: () => _markAsRefunded(index),
-                        child: Text('Refund'),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: () => _settleCredit(order),
+                        icon: Icon(Icons.check, size: 16),
+                        label: Text('Mark as Paid'),
                       ),
-                      ElevatedButton(
-                        onPressed: () => _markAsPaid(order),
-                        child: Text('Mark as Paid'),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.orange,
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: () => _markAsRefunded(index),
+                        icon: Icon(Icons.undo, size: 16),
+                        label: Text('Refund'),
                       ),
                     ],
                   ),
                 ),
-                
-              // Action buttons
+
               if (_selectedFilter != 'Saved Orders') ...[
-                if (order.total >= 0 && !order.isRefunded)
+                if (!isCredit && !order.isRefunded && !isSettledCredit)
                   ListTile(
                     title: TextButton(
                       child: Text("Mark as Refunded"),
@@ -1382,7 +1784,7 @@ Future<void> uploadSalesOnline(BuildContext context) async {
                     ),
                   ),
               ],
-              
+
               if (_selectedFilter == 'Saved Orders')
                 ListTile(
                   title: Row(
@@ -1406,22 +1808,19 @@ Future<void> uploadSalesOnline(BuildContext context) async {
     );
   }
 
-  // ==================== DRAFT METHODS ====================
-
+  // ─────────────────────────────────────────────────────────
+  // DRAFT METHODS
+  // ─────────────────────────────────────────────────────────
   void _completeDraft(int index) async {
     Order draftOrder = filteredOrders[index];
-    
-    // Remove from draft orders
     draftOrders.removeWhere((o) => o.orderNumber == draftOrder.orderNumber);
     await _saveDraftOrders();
 
-    // Add to complete orders
     final prefs = await SharedPreferences.getInstance();
     List<String> completeOrdersJson = prefs.getStringList('orders') ?? [];
     completeOrdersJson.add(jsonEncode(draftOrder.toJson()));
     await prefs.setStringList('orders', completeOrdersJson);
 
-    // Reload all orders
     await _loadOrders();
 
     Fluttertoast.showToast(
@@ -1435,10 +1834,9 @@ Future<void> uploadSalesOnline(BuildContext context) async {
 
   void _deleteDraft(int index) async {
     Order draftOrder = filteredOrders[index];
-    
     draftOrders.removeWhere((o) => o.orderNumber == draftOrder.orderNumber);
     await _saveDraftOrders();
-    
+
     setState(() {
       _applyFilter();
       draftCount = draftOrders.length;
@@ -1458,27 +1856,6 @@ Future<void> uploadSalesOnline(BuildContext context) async {
     List<String> draftOrdersJson =
         draftOrders.map((order) => jsonEncode(order.toJson())).toList();
     await prefs.setStringList('draftOrders', draftOrdersJson);
-  }
-
-  void _markAsPaid(Order order) async {
-    setState(() {
-      order.total = order.total.abs();
-    });
-
-    final prefs = await SharedPreferences.getInstance();
-    List<String> completeOrdersJson = prefs.getStringList('orders') ?? [];
-    completeOrdersJson.add(jsonEncode(order.toJson()));
-    await prefs.setStringList('orders', completeOrdersJson);
-
-    await _loadOrders();
-
-    Fluttertoast.showToast(
-        msg: 'Order marked as paid',
-        toastLength: Toast.LENGTH_SHORT,
-        gravity: ToastGravity.CENTER,
-        backgroundColor: Colors.green,
-        textColor: Colors.white,
-        fontSize: 16.0);
   }
 
   void showToast(String message) {

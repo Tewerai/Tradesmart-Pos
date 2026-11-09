@@ -59,8 +59,8 @@ class Order {
   bool isRefunded;
   double refundAmount;
   Discount? appliedDiscount;
-  double? discountAmount; // New field for total discount value
-  double? originalTotal; // New field for original total before discount
+  double? discountAmount;
+  double? originalTotal;
 
   Order({
     required this.orderNumber,
@@ -86,8 +86,11 @@ class Order {
         'isRefunded': isRefunded,
         'refundAmount': refundAmount,
         'appliedDiscount': appliedDiscount?.toJson(),
-        'discountAmount': discountAmount ?? _calculateDiscountAmount(),
-        'originalTotal': originalTotal ?? _calculateOriginalTotal(),
+        'has_discount': appliedDiscount != null || (products.any((p) => 
+            (p.discountAmount != null && p.discountAmount! > 0) || 
+            (p.discountPercentage != null && p.discountPercentage! > 0))),
+        'discount': _calculateDiscountAmount(),
+        'original_total': _calculateOriginalTotal(),
       };
 
   factory Order.fromJson(Map<String, dynamic> json) => Order(
@@ -103,8 +106,8 @@ class Order {
         appliedDiscount: json['appliedDiscount'] != null 
             ? Discount.fromJson(json['appliedDiscount']) 
             : null,
-        discountAmount: json['discountAmount']?.toDouble(),
-        originalTotal: json['originalTotal']?.toDouble(),
+        discountAmount: json['discount']?.toDouble(),
+        originalTotal: json['original_total']?.toDouble(),
       );
   
   double _calculateDiscountAmount() {
@@ -149,3 +152,4 @@ enum DiscountType {
   Percentage,
   Price,
 }
+

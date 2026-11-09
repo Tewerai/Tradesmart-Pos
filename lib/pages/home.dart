@@ -19,6 +19,7 @@ import 'storeinfo.dart';
 import 'testprinter.dart';
 import 'customers.dart'; // <--- NEW: Import the CustomerListPage
 import 'invoice.dart'; // <--- NEW: Import the CustomerListPage
+import '../fiscal_day_page.dart'; // <--- NEW: Fiscal Day page
 
 // Model classes
 class Order {
@@ -135,6 +136,7 @@ class _HomePageState extends State<HomePage> {
   bool isLoading = false;
   bool useHamburgerDisplay = false;
   String currencySymbol = '\$'; // Default currency symbol
+  bool zimraEnabled = false; // <--- NEW: ZIMRA enabled flag
 
   @override
   void initState() {
@@ -142,6 +144,7 @@ class _HomePageState extends State<HomePage> {
     _loadCurrencySymbol();
     _loadOrders();
     _checkHamburgerSetting();
+    _loadZimraStatus(); // <--- NEW: Load ZIMRA status
   }
 
   Future<void> _loadCurrencySymbol() async {
@@ -156,6 +159,15 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       useHamburgerDisplay = prefs.getBool('useHamburgerDisplay') ?? false;
     });
+  }
+
+  // <--- NEW: Load ZIMRA status from SharedPreferences
+  Future<void> _loadZimraStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      zimraEnabled = prefs.getBool('zimraEnabled') ?? false;
+    });
+    print('ZIMRA Enabled: $zimraEnabled');
   }
 
   Future<void> _loadOrders() async {
@@ -196,7 +208,7 @@ class _HomePageState extends State<HomePage> {
     if (connectivityResult != ConnectivityResult.none) {
       try {
         var response = await http.post(
-          Uri.parse('https://aphel.blueichor.org/log2.php'),
+          Uri.parse('https://blueichor.org/log2.php'),
           body: {'username': shopId, 'password': password},
         );
 
@@ -210,6 +222,16 @@ class _HomePageState extends State<HomePage> {
             prefs.setString('codes', json.encode(jsondata["codes"]));
             prefs.setString('measure', json.encode(jsondata["measure"]));
             prefs.setString('quantities', json.encode(jsondata["quantities"]));
+
+            // <--- NEW: Update ZIMRA status from refresh
+            if (jsondata['zimra_enabled'] != null) {
+              int zimraEnabledInt = jsondata['zimra_enabled'];
+              prefs.setInt('zimra_enabled', zimraEnabledInt);
+              prefs.setBool('zimraEnabled', zimraEnabledInt == 1);
+              setState(() {
+                zimraEnabled = zimraEnabledInt == 1;
+              });
+            }
           }
         }
       } catch (e) {
@@ -289,11 +311,11 @@ class _HomePageState extends State<HomePage> {
             child: Text('Menu',
                 style: TextStyle(color: Colors.white, fontSize: 24)),
           ),
-          _buildDrawerItem(Icons.add_shopping_cart, 'Sell', SellPage1()), // Changed from 'Add Sell' to 'Sell' for consistency
+          _buildDrawerItem(Icons.add_shopping_cart, 'Sell', SellPage1()),
           _buildDrawerItem(
               Icons.shopping_basket, 'Products', ProductListPage()),
           _buildDrawerItem(
-              Icons.group, 'Customers', const CustomerListPage()), // <--- NEW: Customer List Page in Drawer
+              Icons.group, 'Customers', const CustomerListPage()),
           _buildDrawerItem(
               Icons.cloud_upload, 'Upload Sales', ViewHistoryPage()),
           _buildDrawerItem(Icons.money_off, 'Expenses', ExpensePage()),
@@ -305,7 +327,15 @@ class _HomePageState extends State<HomePage> {
           _buildDrawerItem(Icons.print, 'Configure Printer', PrinterPage()),
           _buildDrawerItem(Icons.settings, 'Settings', SettingsPage()),
           _buildDrawerItem(Icons.security, 'Guard', GuardApp()),
-          _buildDrawerItem(Icons.select_all_sharp, 'Guard', ZimraApp()),
+          // <--- NEW: Only show ZIMRA if enabled
+          /*if (zimraEnabled)
+            _buildDrawerItem(Icons.satellite_alt, 'Zimra', ZimraApp()),*/
+          // <--- NEW: Fiscal Day page — only show if ZIMRA is enabled
+          if (zimraEnabled)
+            _buildDrawerItem(
+                Icons.event_available, 'Fiscal Day', const FiscalDayPage()),
+          // <--- NEW: Only show Invoice if enabled (optional)
+          // _buildDrawerItem(Icons.sell_sharp, 'Invoice', InvoicePage1()),
         ],
       ),
     );
@@ -386,7 +416,7 @@ class _HomePageState extends State<HomePage> {
         'label': 'Products',
         'page': ProductListPage()
       },
-      {'icon': Icons.group, 'label': 'Customers', 'page': const CustomerListPage()}, // <--- NEW: Customer List Page in Grid
+      {'icon': Icons.group, 'label': 'Customers', 'page': const CustomerListPage()},
       {'icon': Icons.money_off, 'label': 'Expenses', 'page': ExpensePage()},
       {
         'icon': Icons.cloud_upload,
@@ -409,7 +439,16 @@ class _HomePageState extends State<HomePage> {
       {'icon': Icons.settings, 'label': 'Settings', 'page': SettingsPage()},
       {'icon': Icons.security, 'label': 'Guards', 'page': GuardApp()},
       {'icon': Icons.sell_sharp, 'label': 'Invoice', 'page': InvoicePage1()},
-      {'icon': Icons.satellite_alt, 'label': 'Zimra', 'page': ZimraApp()},
+      // <--- NEW: Only show ZIMRA if enabled
+     /* if (zimraEnabled)
+        {'icon': Icons.satellite_alt, 'label': 'Zimra', 'page': ZimraApp()},*/
+      // <--- NEW: Fiscal Day button — only show if ZIMRA is enabled
+      if (zimraEnabled)
+        {
+          'icon': Icons.event_available,
+          'label': 'Fiscal Day',
+          'page': const FiscalDayPage(),
+        },
     ];
 
     return Expanded(
