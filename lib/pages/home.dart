@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:http/http.dart' as http;
+import 'update_stock_page.dart';
 
 // Import your pages
 import 'addstock.dart';
@@ -17,9 +18,11 @@ import 'products.dart';
 import 'sell_page.dart';
 import 'storeinfo.dart';
 import 'testprinter.dart';
-import 'customers.dart'; // <--- NEW: Import the CustomerListPage
-import 'invoice.dart'; // <--- NEW: Import the CustomerListPage
-import '../fiscal_day_page.dart'; // <--- NEW: Fiscal Day page
+import 'customers.dart'; // <--- CustomerListPage
+import 'invoice.dart'; // <--- Invoice page
+import '../fiscal_day_page.dart'; // <--- Fiscal Day page
+import 'login.dart'; // <--- Login page (for logout)
+import 'analytics_page.dart'; // <--- NEW: Analytics dashboard
 
 // Model classes
 class Order {
@@ -136,7 +139,7 @@ class _HomePageState extends State<HomePage> {
   bool isLoading = false;
   bool useHamburgerDisplay = false;
   String currencySymbol = '\$'; // Default currency symbol
-  bool zimraEnabled = false; // <--- NEW: ZIMRA enabled flag
+  bool zimraEnabled = false; // ZIMRA enabled flag
 
   @override
   void initState() {
@@ -144,7 +147,7 @@ class _HomePageState extends State<HomePage> {
     _loadCurrencySymbol();
     _loadOrders();
     _checkHamburgerSetting();
-    _loadZimraStatus(); // <--- NEW: Load ZIMRA status
+    _loadZimraStatus();
   }
 
   Future<void> _loadCurrencySymbol() async {
@@ -161,7 +164,6 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  // <--- NEW: Load ZIMRA status from SharedPreferences
   Future<void> _loadZimraStatus() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
@@ -178,7 +180,6 @@ class _HomePageState extends State<HomePage> {
       shopId = prefs.getString('username') ?? '';
       password = prefs.getString('password') ?? '';
 
-      // Load the hide total setting
       bool hideTotal = prefs.getBool('hideTotalOnHomepage') ?? false;
 
       List<Order> loadedOrders =
@@ -198,7 +199,6 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _refreshData() async {
-    // Reload orders and total revenue
     await _loadOrders();
     setState(() {
       isLoading = true;
@@ -223,7 +223,6 @@ class _HomePageState extends State<HomePage> {
             prefs.setString('measure', json.encode(jsondata["measure"]));
             prefs.setString('quantities', json.encode(jsondata["quantities"]));
 
-            // <--- NEW: Update ZIMRA status from refresh
             if (jsondata['zimra_enabled'] != null) {
               int zimraEnabledInt = jsondata['zimra_enabled'];
               prefs.setInt('zimra_enabled', zimraEnabledInt);
@@ -235,7 +234,6 @@ class _HomePageState extends State<HomePage> {
           }
         }
       } catch (e) {
-        // print('Error fetching data: $e');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
               content: Text(
@@ -252,6 +250,60 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       isLoading = false;
     });
+  }
+
+  Future<void> _logout() async {
+    final shouldLogout = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Logout'),
+        content: const Text('Are you sure you want to log out?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Logout'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldLogout != true) return;
+
+    final prefs = await SharedPreferences.getInstance();
+
+    const keysToClear = [
+      'username',
+      'password',
+      'fullname',
+      'shopName',
+      'address',
+      'tel',
+      'products',
+      'prices',
+      'measure',
+      'codes',
+      'quantities',
+      'categories',
+      'zimra_enabled',
+      'zimraEnabled',
+      'zimra_status',
+      'zimra_device_id',
+      'zimra_fiscal_day_status',
+    ];
+    for (final key in keysToClear) {
+      await prefs.remove(key);
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => LoginPage()),
+      (route) => false,
+    );
   }
 
   @override
@@ -311,6 +363,10 @@ class _HomePageState extends State<HomePage> {
             child: Text('Menu',
                 style: TextStyle(color: Colors.white, fontSize: 24)),
           ),
+          // <--- NEW: Analytics at the top of the drawer
+          _buildDrawerItem(
+              Icons.analytics, 'Analytics', const AnalyticsPage()),
+              _buildDrawerItem(Icons.edit_note, 'Update Stock', const UpdateStockPage()),
           _buildDrawerItem(Icons.add_shopping_cart, 'Sell', SellPage1()),
           _buildDrawerItem(
               Icons.shopping_basket, 'Products', ProductListPage()),
@@ -327,15 +383,19 @@ class _HomePageState extends State<HomePage> {
           _buildDrawerItem(Icons.print, 'Configure Printer', PrinterPage()),
           _buildDrawerItem(Icons.settings, 'Settings', SettingsPage()),
           _buildDrawerItem(Icons.security, 'Guard', GuardApp()),
-          // <--- NEW: Only show ZIMRA if enabled
-          /*if (zimraEnabled)
-            _buildDrawerItem(Icons.satellite_alt, 'Zimra', ZimraApp()),*/
-          // <--- NEW: Fiscal Day page — only show if ZIMRA is enabled
           if (zimraEnabled)
             _buildDrawerItem(
                 Icons.event_available, 'Fiscal Day', const FiscalDayPage()),
-          // <--- NEW: Only show Invoice if enabled (optional)
-          // _buildDrawerItem(Icons.sell_sharp, 'Invoice', InvoicePage1()),
+
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.logout, color: Colors.red),
+            title: const Text('Logout', style: TextStyle(color: Colors.red)),
+            onTap: () {
+              Navigator.pop(context);
+              _logout();
+            },
+          ),
         ],
       ),
     );
@@ -408,8 +468,18 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildFunctionalityButtons(BuildContext context) {
-    // Button data
     final List<Map<String, dynamic>> buttons = [
+      // <--- NEW: Analytics first so it's prominent
+      {
+        'icon': Icons.analytics,
+        'label': 'Analytics',
+        'page': const AnalyticsPage(),
+      },
+      {
+  'icon': Icons.edit_note,
+  'label': 'Update Stock',
+  'page': const UpdateStockPage(),
+},
       {'icon': Icons.add_shopping_cart, 'label': 'Sell', 'page': SellPage1()},
       {
         'icon': Icons.shopping_basket,
@@ -439,32 +509,34 @@ class _HomePageState extends State<HomePage> {
       {'icon': Icons.settings, 'label': 'Settings', 'page': SettingsPage()},
       {'icon': Icons.security, 'label': 'Guards', 'page': GuardApp()},
       {'icon': Icons.sell_sharp, 'label': 'Invoice', 'page': InvoicePage1()},
-      // <--- NEW: Only show ZIMRA if enabled
-     /* if (zimraEnabled)
-        {'icon': Icons.satellite_alt, 'label': 'Zimra', 'page': ZimraApp()},*/
-      // <--- NEW: Fiscal Day button — only show if ZIMRA is enabled
       if (zimraEnabled)
         {
           'icon': Icons.event_available,
           'label': 'Fiscal Day',
           'page': const FiscalDayPage(),
         },
+      {
+        'icon': Icons.logout,
+        'label': 'Logout',
+        'onTap': _logout,
+        'color': Colors.red,
+      },
     ];
 
     return Expanded(
       child: GridView.builder(
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3, // 3 buttons per row
-          crossAxisSpacing: 16.0, // Space between buttons horizontally
-          mainAxisSpacing: 16.0, // Space between buttons vertically
-          childAspectRatio: 1.0, // Aspect ratio for a square-like button
+          crossAxisCount: 3,
+          crossAxisSpacing: 16.0,
+          mainAxisSpacing: 16.0,
+          childAspectRatio: 1.0,
         ),
-        padding: const EdgeInsets.all(16.0), // Padding around the grid
-        itemCount: buttons.length, // Dynamically get the count
+        padding: const EdgeInsets.all(16.0),
+        itemCount: buttons.length,
         itemBuilder: (context, index) {
           return _buildFunctionalityButton(
             context,
-            buttons[index], // Pass the entire button data
+            buttons[index],
           );
         },
       ),
@@ -473,12 +545,19 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildFunctionalityButton(
       BuildContext context, Map<String, dynamic> buttonData) {
+    final Color iconColor = (buttonData['color'] as Color?) ?? Colors.blueAccent;
+    final bool isDestructive = buttonData['color'] != null;
+
     return GestureDetector(
       onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (context) => buttonData['page']),
-        );
+        if (buttonData.containsKey('onTap')) {
+          (buttonData['onTap'] as VoidCallback)();
+        } else {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => buttonData['page']),
+          );
+        }
       },
       child: Container(
         decoration: BoxDecoration(
@@ -495,15 +574,15 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(buttonData['icon'], size: 40.0, color: Colors.blueAccent),
+            Icon(buttonData['icon'], size: 40.0, color: iconColor),
             const SizedBox(height: 8.0),
             Text(
               buttonData['label'],
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 14.0,
                 fontWeight: FontWeight.w600,
-                color: Colors.black87,
+                color: isDestructive ? iconColor : Colors.black87,
               ),
             ),
           ],

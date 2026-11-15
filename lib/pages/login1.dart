@@ -13,15 +13,11 @@ class MyHttpOverrides extends HttpOverrides {
   @override
   HttpClient createHttpClient(SecurityContext? context) {
     context ??= SecurityContext.defaultContext;
-
-    // Add Let's Encrypt root certificate to the SecurityContext
     try {
       context.setTrustedCertificatesBytes(utf8.encode(_letsEncryptCert));
-      print('Certificate added to the security context.');
     } catch (e) {
-      print('Error adding certificate to the security context: $e');
+      print('Error adding certificate: $e');
     }
-
     return super.createHttpClient(context)
       ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
   }
@@ -66,7 +62,7 @@ void main() {
 }
 
 Future<void> login(String username, String password, BuildContext context) async {
-  var url = Uri.parse('https://blueichor.org/log2.php'); // Replace with your server URL
+  var url = Uri.parse('https://blueichor.org/log2.php'); 
   
   ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(
@@ -87,14 +83,12 @@ Future<void> login(String username, String password, BuildContext context) async
       'password': password,
     });
 
-    ScaffoldMessenger.of(context).hideCurrentSnackBar(); // Hide the loader
+    ScaffoldMessenger.of(context).hideCurrentSnackBar(); 
 
     if (response.statusCode == 200) {
       var data = json.decode(response.body);
       if (data['success']) {
         final SharedPreferences prefs = await SharedPreferences.getInstance();
-
-        // Save user data
         prefs.setString('fullname', data['fullname']);
         prefs.setString('shopName', data['shopName']);
         prefs.setString('address', data['shopaddress'] ?? '');
@@ -108,14 +102,10 @@ Future<void> login(String username, String password, BuildContext context) async
         prefs.setString('quantities', json.encode(data['quantities']));
         prefs.setString('categories', json.encode(data['categories']));
         
-        // ============================================
-        // SAVE ZIMRA STATUS TO LOCAL PREFERENCES
-        // ============================================
         int zimraEnabled = data['zimra_enabled'] ?? 0;
         prefs.setInt('zimra_enabled', zimraEnabled);
         prefs.setBool('zimraEnabled', zimraEnabled == 1);
         
-        // Optional: Save more ZIMRA related data if available
         if (data['zimra_status'] != null) {
           prefs.setString('zimra_status', data['zimra_status']);
         }
@@ -125,13 +115,6 @@ Future<void> login(String username, String password, BuildContext context) async
         if (data['zimra_fiscal_day_status'] != null) {
           prefs.setString('zimra_fiscal_day_status', data['zimra_fiscal_day_status']);
         }
-        
-        print('ZIMRA Enabled: $zimraEnabled');
-        print('ZIMRA Status: ${data['zimra_status'] ?? 'Not set'}');
-        
-        print(data['fullname']);
-        print(data['categories']);
-        print(data['measure']);
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -142,19 +125,16 @@ Future<void> login(String username, String password, BuildContext context) async
 
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => HomePage()), // Navigate to HomePage on success
+          MaterialPageRoute(builder: (context) => HomePage()), 
         );
       } else {
-        // Handle login error
         _showSnackBar(context, data['message']);
       }
     } else {
-      // Handle server error
       _showSnackBar(context, 'Server error. Please try again later.');
     }
   } catch (e) {
-    // Handle network error
-    ScaffoldMessenger.of(context).hideCurrentSnackBar(); // Hide the loader
+    ScaffoldMessenger.of(context).hideCurrentSnackBar(); 
     _showSnackBar(context, 'Error: $e');
   }
 }
@@ -172,15 +152,10 @@ class LoginPag extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      debugShowCheckedModeBanner: false,
       home: LoginPage(),
       theme: ThemeData(
         primarySwatch: Colors.blue,
-        textTheme: TextTheme(
-          bodyMedium: TextStyle(
-            color: Colors.grey,
-            fontSize: 18.0,
-          ),
-        ),
         fontFamily: 'YourCustomFont',
       ),
     );
@@ -196,64 +171,37 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   
-  late AnimationController _animationController;
-  late Animation<double> _fadeAnimation;
-  late Animation<Offset> _slideAnimation;
-  late Animation<double> _scaleAnimation;
-  late Animation<double> _rotationAnimation;
+  // We only need a fade animation for the image now
+  late AnimationController _imageFadeController;
+  late Animation<double> _imageFadeAnimation;
+
+  // Define the exact blue color from the image
+  final Color _brandBlue = const Color(0xFF1148C8);
 
   @override
   void initState() {
     super.initState();
     
-    // Initialize animation controller
-    _animationController = AnimationController(
+    // Setup fade animation for the picture
+    _imageFadeController = AnimationController(
       vsync: this,
-      duration: Duration(milliseconds: 1200),
+      duration: const Duration(milliseconds: 1500), // 1.5 seconds fade
     );
     
-    // Fade animation
-    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+    _imageFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(
-        parent: _animationController,
-        curve: Interval(0.0, 0.6, curve: Curves.easeOut),
+        parent: _imageFadeController,
+        curve: Curves.easeIn,
       ),
     );
     
-    // Slide animation (from bottom)
-    _slideAnimation = Tween<Offset>(
-      begin: Offset(0, 0.3),
-      end: Offset.zero,
-    ).animate(
-      CurvedAnimation(
-        parent: _animationController,
-        curve: Interval(0.2, 0.8, curve: Curves.easeOutCubic),
-      ),
-    );
-    
-    // Scale animation for logo
-    _scaleAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _animationController,
-        curve: Interval(0.0, 0.5, curve: Curves.elasticOut),
-      ),
-    );
-    
-    // Rotation animation for logo
-    _rotationAnimation = Tween<double>(begin: -0.5, end: 0.0).animate(
-      CurvedAnimation(
-        parent: _animationController,
-        curve: Interval(0.0, 0.4, curve: Curves.easeOutQuad),
-      ),
-    );
-    
-    // Start animation
-    _animationController.forward();
+    // Start the fade animation
+    _imageFadeController.forward();
   }
 
   @override
   void dispose() {
-    _animationController.dispose();
+    _imageFadeController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -262,427 +210,188 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFF1A237E), // Dark blue
-              Color(0xFF0D47A1), // Medium blue
-              Color(0xFF01579B), // Light blue
-            ],
-          ),
-        ),
-        child: SafeArea(
-          child: SingleChildScrollView(
-            physics: BouncingScrollPhysics(),
-            child: Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  // Animated Logo and App Name
-                  FadeTransition(
-                    opacity: _fadeAnimation,
-                    child: SlideTransition(
-                      position: _slideAnimation,
-                      child: Column(
-                        children: [
-                          // Animated Icon/Logo
-                          ScaleTransition(
-                            scale: _scaleAnimation,
-                            child: RotationTransition(
-                              turns: _rotationAnimation,
-                              child: Container(
-                                padding: EdgeInsets.all(20),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.15),
-                                  shape: BoxShape.circle,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withOpacity(0.3),
-                                      blurRadius: 20,
-                                      spreadRadius: 5,
-                                    ),
-                                  ],
-                                ),
-                                child: Icon(
-                                  Icons.shopping_cart,
-                                  size: 80,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                          ),
-                          SizedBox(height: 16),
-                          ShaderMask(
-                            shaderCallback: (bounds) => LinearGradient(
-                              colors: [Colors.white, Colors.blue[200]!],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ).createShader(bounds),
-                            child: Text(
-                              'TradeSmart',
-                              style: TextStyle(
-                                fontSize: 36,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                                letterSpacing: 2,
-                              ),
-                            ),
-                          ),
-                          SizedBox(height: 8),
-                          Text(
-                            'Smart Trading Solutions',
-                            style: TextStyle(
-                              fontSize: 16,
-                              color: Colors.white70,
-                              letterSpacing: 1,
-                            ),
-                          ),
-                        ],
-                      ),
+      backgroundColor: Colors.white, // Pure white background like the image
+      body: SafeArea(
+        child: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 20.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                
+                const SizedBox(height: 20),
+                
+                // --- Fading Picture Section ---
+                FadeTransition(
+                  opacity: _imageFadeAnimation,
+                  child: SizedBox(
+                    height: 220,
+                    width: double.infinity,
+                    child: Image.network(
+                      // Replace this URL with your actual asset: Image.asset('assets/your_image.png')
+                      'https://img.freepik.com/free-vector/two-business-partners-working-office_74855-6620.jpg?w=740&t=st=1715000000~exp=1715003600~hmac=abcdef', 
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) {
+                        // Fallback icon if the network image fails to load
+                        return Icon(Icons.business_center, size: 150, color: _brandBlue.withOpacity(0.5));
+                      },
                     ),
                   ),
-                  
-                  SizedBox(height: 60),
-                  
-                  // Login Form with Animation
-                  FadeTransition(
-                    opacity: _fadeAnimation,
-                    child: SlideTransition(
-                      position: _slideAnimation,
-                      child: Container(
-                        padding: EdgeInsets.all(24),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.95),
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.2),
-                              blurRadius: 20,
-                              offset: Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Text(
-                              'Welcome Back!',
-                              style: TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF1A237E),
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                            SizedBox(height: 8),
-                            Text(
-                              'Enter your credentials to continue',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey[600],
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                            SizedBox(height: 24),
-                            
-                            // Email Field with Animation
-                            _buildAnimatedTextField(
-                              controller: _usernameController,
-                              label: 'Email',
-                              icon: Icons.email,
-                              keyboardType: TextInputType.emailAddress,
-                              delay: 0.3,
-                            ),
-                            
-                            SizedBox(height: 16),
-                            
-                            // Password Field with Animation
-                            _buildAnimatedTextField(
-                              controller: _passwordController,
-                              label: 'Password',
-                              icon: Icons.lock,
-                              obscureText: true,
-                              delay: 0.5,
-                            ),
-                            
-                            SizedBox(height: 8),
-                            
-                            // Forgot Password
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: TextButton(
-                                onPressed: () {
-                                  _showForgotPasswordDialog(context);
-                                },
-                                child: Text(
-                                  'Forgot Password?',
-                                  style: TextStyle(
-                                    color: Color(0xFF0D47A1),
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            
-                            SizedBox(height: 16),
-                            
-                            // Login Button with Animation
-                            _buildAnimatedButton(
-                              onPressed: () {
-                                login(_usernameController.text, _passwordController.text, context);
-                              },
-                              label: 'Login',
-                              icon: Icons.login,
-                              color: Colors.green,
-                              delay: 0.7,
-                            ),
-                            
-                            SizedBox(height: 12),
-                            
-                            // Create Account Button with Animation
-                            _buildAnimatedButton(
-                              onPressed: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => SignUpForm(),
-                                  ),
-                                );
-                              },
-                              label: 'Create Account',
-                              icon: Icons.person_add,
-                              color: Colors.blue,
-                              delay: 0.9,
-                              isOutlined: true,
-                            ),
-                            
-                            SizedBox(height: 16),
-                            
-                            // Divider with "OR"
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Divider(
-                                    thickness: 1,
-                                    color: Colors.grey[300],
-                                  ),
-                                ),
-                                Padding(
-                                  padding: EdgeInsets.symmetric(horizontal: 16),
-                                  child: Text(
-                                    'OR',
-                                    style: TextStyle(
-                                      color: Colors.grey[500],
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                                Expanded(
-                                  child: Divider(
-                                    thickness: 1,
-                                    color: Colors.grey[300],
-                                  ),
-                                ),
-                              ],
-                            ),
-                            
-                            SizedBox(height: 12),
-                            
-                            // Demo Credentials (Optional)
-                            Container(
-                              padding: EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.blue[50],
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(
-                                  color: Colors.blue[200]!,
-                                ),
-                              ),
-                              child: Column(
-                                children: [
-                                  Text(
-                                    'Demo Credentials',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.blue[800],
-                                    ),
-                                  ),
-                                  SizedBox(height: 4),
-                                  Text(
-                                    'Email: demo@example.com\nPassword: demo123',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.blue[600],
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  
-                  SizedBox(height: 20),
-                  
-                  // Footer Animation
-                  FadeTransition(
-                    opacity: _fadeAnimation,
-                    child: SlideTransition(
-                      position: _slideAnimation,
-                      child: Text(
-                        '© 2024 TradeSmart. All rights reserved.',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.white60,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+                ),
+                
+                const SizedBox(height: 30),
 
-  Widget _buildAnimatedTextField({
-    required TextEditingController controller,
-    required String label,
-    required IconData icon,
-    bool obscureText = false,
-    TextInputType keyboardType = TextInputType.text,
-    required double delay,
-  }) {
-    return FadeTransition(
-      opacity: _fadeAnimation,
-      child: SlideTransition(
-        position: _slideAnimation,
-        child: TweenAnimationBuilder(
-          duration: Duration(milliseconds: 400),
-          curve: Curves.easeOutCubic,
-          tween: Tween<double>(begin: 0, end: 1),
-          builder: (context, value, child) {
-            return Transform.scale(
-              scale: value,
-              child: child,
-            );
-          },
-          child: TextFormField(
-            controller: controller,
-            obscureText: obscureText,
-            keyboardType: keyboardType,
-            style: TextStyle(
-              color: Colors.black87,
-              fontSize: 16,
-            ),
-            decoration: InputDecoration(
-              labelText: label,
-              labelStyle: TextStyle(
-                color: Colors.grey[600],
-                fontSize: 14,
-              ),
-              prefixIcon: Icon(
-                icon,
-                color: Color(0xFF0D47A1),
-              ),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: Colors.grey[300]!),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: Colors.grey[300]!),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: Color(0xFF0D47A1), width: 2),
-              ),
-              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-              filled: true,
-              fillColor: Colors.white,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+                // --- Welcome Text ---
+                const Text(
+                  'Welcome',
+                  style: TextStyle(
+                    fontSize: 38,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black,
+                  ),
+                ),
+                
+                const SizedBox(height: 10),
+                
+                const Text(
+                  'Sign In using Email and Password',
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: Colors.black87,
+                  ),
+                ),
 
-  Widget _buildAnimatedButton({
-    required VoidCallback onPressed,
-    required String label,
-    required IconData icon,
-    required Color color,
-    required double delay,
-    bool isOutlined = false,
-  }) {
-    return FadeTransition(
-      opacity: _fadeAnimation,
-      child: SlideTransition(
-        position: _slideAnimation,
-        child: TweenAnimationBuilder(
-          duration: Duration(milliseconds: 500),
-          curve: Curves.elasticOut,
-          tween: Tween<double>(begin: 0, end: 1),
-          builder: (context, value, child) {
-            return Transform.scale(
-              scale: value,
-              child: child,
-            );
-          },
-          child: Container(
-            width: double.infinity,
-            child: isOutlined
-                ? OutlinedButton.icon(
-                    onPressed: onPressed,
-                    icon: Icon(icon),
-                    label: Text(
-                      label,
+                const SizedBox(height: 40),
+
+                // --- Username Field ---
+                TextFormField(
+                  controller: _usernameController,
+                  style: TextStyle(color: _brandBlue, fontWeight: FontWeight.w600),
+                  decoration: InputDecoration(
+                    prefixIcon: Icon(Icons.person, color: _brandBlue),
+                    hintText: 'Username',
+                    hintStyle: TextStyle(color: _brandBlue.withOpacity(0.7), fontWeight: FontWeight.w600),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 18),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(30),
+                      borderSide: BorderSide(color: _brandBlue, width: 1.5),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(30),
+                      borderSide: BorderSide(color: _brandBlue, width: 2.0),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
+                // --- Password Field ---
+                TextFormField(
+                  controller: _passwordController,
+                  obscureText: true,
+                  style: TextStyle(color: _brandBlue, fontWeight: FontWeight.w600),
+                  decoration: InputDecoration(
+                    prefixIcon: Icon(Icons.lock, color: _brandBlue),
+                    hintText: 'Password',
+                    hintStyle: TextStyle(color: _brandBlue.withOpacity(0.7), fontWeight: FontWeight.w600),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 18),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(30),
+                      borderSide: BorderSide(color: _brandBlue, width: 1.5),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(30),
+                      borderSide: BorderSide(color: _brandBlue, width: 2.0),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 30),
+
+                // --- Login Now Button ---
+                SizedBox(
+                  width: double.infinity,
+                  height: 55,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      login(_usernameController.text, _passwordController.text, context);
+                    },
+                    icon: const Icon(Icons.login, color: Color(0xFF5E35B1)),
+                    label: const Text(
+                      'LOGIN NOW',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: color,
-                      padding: EdgeInsets.symmetric(vertical: 14),
-                      side: BorderSide(color: color, width: 2),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                  )
-                : ElevatedButton.icon(
-                    onPressed: onPressed,
-                    icon: Icon(icon),
-                    label: Text(
-                      label,
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF5E35B1),
+                        letterSpacing: 1.2,
                       ),
                     ),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: color,
-                      foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(vertical: 14),
-                      elevation: 8,
-                      shadowColor: color.withOpacity(0.4),
+                      backgroundColor: const Color(0xFFF3E5F5), // Light purple background
+                      elevation: 0,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(30),
                       ),
                     ),
                   ),
+                ),
+
+                const SizedBox(height: 15),
+
+                // --- Create Account Button ---
+                SizedBox(
+                  width: double.infinity,
+                  height: 55,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => SignUpForm(),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.person_add, color: Color(0xFF5E35B1)),
+                    label: const Text(
+                      'CREATE ACCOUNT',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _brandBlue,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 30),
+
+                // --- Footer Text ---
+                GestureDetector(
+                  onTap: () {
+                    _showForgotPasswordDialog(context);
+                  },
+                  child: const Text(
+                    'Forgot Password? Troubleshoot',
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: Colors.black87,
+                    ),
+                  ),
+                ),
+                
+                const SizedBox(height: 20),
+              ],
+            ),
           ),
         ),
       ),
@@ -697,7 +406,7 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
           title: Text(
             'Reset Password',
             style: TextStyle(
-              color: Color(0xFF1A237E),
+              color: _brandBlue,
               fontWeight: FontWeight.bold,
             ),
           ),
@@ -709,16 +418,16 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
                 size: 60,
                 color: Colors.blue[300],
               ),
-              SizedBox(height: 16),
-              Text(
+              const SizedBox(height: 16),
+              const Text(
                 'Enter your email address and we\'ll send you a link to reset your password.',
                 textAlign: TextAlign.center,
               ),
-              SizedBox(height: 16),
+              const SizedBox(height: 16),
               TextField(
                 decoration: InputDecoration(
                   labelText: 'Email',
-                  prefixIcon: Icon(Icons.email),
+                  prefixIcon: const Icon(Icons.email),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(10),
                   ),
@@ -729,19 +438,19 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: Text('Cancel'),
+              child: const Text('Cancel'),
             ),
             ElevatedButton(
               onPressed: () {
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
+                  const SnackBar(
                     content: Text('Password reset link sent to your email!'),
                     backgroundColor: Colors.green,
                   ),
                 );
               },
-              child: Text('Send Link'),
+              child: const Text('Send Link'),
             ),
           ],
         );

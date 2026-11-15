@@ -62,8 +62,8 @@ void main() {
 }
 
 Future<void> login(String username, String password, BuildContext context) async {
-  var url = Uri.parse('https://blueichor.org/log2.php'); 
-  
+  var url = Uri.parse('https://blueichor.org/log2.php');
+
   ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(
       content: Row(
@@ -83,7 +83,7 @@ Future<void> login(String username, String password, BuildContext context) async
       'password': password,
     });
 
-    ScaffoldMessenger.of(context).hideCurrentSnackBar(); 
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
     if (response.statusCode == 200) {
       var data = json.decode(response.body);
@@ -101,11 +101,11 @@ Future<void> login(String username, String password, BuildContext context) async
         prefs.setString('codes', json.encode(data['codes']));
         prefs.setString('quantities', json.encode(data['quantities']));
         prefs.setString('categories', json.encode(data['categories']));
-        
+
         int zimraEnabled = data['zimra_enabled'] ?? 0;
         prefs.setInt('zimra_enabled', zimraEnabled);
         prefs.setBool('zimraEnabled', zimraEnabled == 1);
-        
+
         if (data['zimra_status'] != null) {
           prefs.setString('zimra_status', data['zimra_status']);
         }
@@ -125,16 +125,16 @@ Future<void> login(String username, String password, BuildContext context) async
 
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => HomePage()), 
+          MaterialPageRoute(builder: (context) => HomePage()),
         );
       } else {
-        _showSnackBar(context, data['message']);
+        _showSnackBar(context, data['message'] ?? 'Invalid credentials.');
       }
     } else {
       _showSnackBar(context, 'Server error. Please try again later.');
     }
   } catch (e) {
-    ScaffoldMessenger.of(context).hideCurrentSnackBar(); 
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     _showSnackBar(context, 'Error: $e');
   }
 }
@@ -170,7 +170,13 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMixin {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
-  
+
+  // Form key for validation
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+
+  // Prevent double-submit while a request is in flight
+  bool _isSubmitting = false;
+
   // We only need a fade animation for the image now
   late AnimationController _imageFadeController;
   late Animation<double> _imageFadeAnimation;
@@ -181,21 +187,20 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
   @override
   void initState() {
     super.initState();
-    
+
     // Setup fade animation for the picture
     _imageFadeController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1500), // 1.5 seconds fade
+      duration: const Duration(milliseconds: 1500),
     );
-    
+
     _imageFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(
         parent: _imageFadeController,
         curve: Curves.easeIn,
       ),
     );
-    
-    // Start the fade animation
+
     _imageFadeController.forward();
   }
 
@@ -207,190 +212,258 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
     super.dispose();
   }
 
+  Future<void> _handleLogin() async {
+    // 1) Run form validation — blocks empty / short inputs
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    // 2) Block double-submits
+    if (_isSubmitting) return;
+    setState(() => _isSubmitting = true);
+
+    try {
+      await login(
+        _usernameController.text.trim(),
+        _passwordController.text,
+        context,
+      );
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white, // Pure white background like the image
+      backgroundColor: Colors.white,
       body: SafeArea(
         child: SingleChildScrollView(
           physics: const BouncingScrollPhysics(),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 20.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                
-                const SizedBox(height: 20),
-                
-                // --- Fading Picture Section ---
-                FadeTransition(
-                  opacity: _imageFadeAnimation,
-                  child: SizedBox(
-                    height: 220,
-                    width: double.infinity,
-                    child: Image.network(
-                      // Replace this URL with your actual asset: Image.asset('assets/your_image.png')
-                      'https://img.freepik.com/free-vector/two-business-partners-working-office_74855-6620.jpg?w=740&t=st=1715000000~exp=1715003600~hmac=abcdef', 
-                      fit: BoxFit.contain,
-                      errorBuilder: (context, error, stackTrace) {
-                        // Fallback icon if the network image fails to load
-                        return Icon(Icons.business_center, size: 150, color: _brandBlue.withOpacity(0.5));
-                      },
-                    ),
-                  ),
-                ),
-                
-                const SizedBox(height: 30),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  const SizedBox(height: 20),
 
-                // --- Welcome Text ---
-                const Text(
-                  'Welcome',
-                  style: TextStyle(
-                    fontSize: 38,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black,
-                  ),
-                ),
-                
-                const SizedBox(height: 10),
-                
-                const Text(
-                  'Sign In using Email and Password',
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.black87,
-                  ),
-                ),
-
-                const SizedBox(height: 40),
-
-                // --- Username Field ---
-                TextFormField(
-                  controller: _usernameController,
-                  style: TextStyle(color: _brandBlue, fontWeight: FontWeight.w600),
-                  decoration: InputDecoration(
-                    prefixIcon: Icon(Icons.person, color: _brandBlue),
-                    hintText: 'Username',
-                    hintStyle: TextStyle(color: _brandBlue.withOpacity(0.7), fontWeight: FontWeight.w600),
-                    contentPadding: const EdgeInsets.symmetric(vertical: 18),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(30),
-                      borderSide: BorderSide(color: _brandBlue, width: 1.5),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(30),
-                      borderSide: BorderSide(color: _brandBlue, width: 2.0),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 20),
-
-                // --- Password Field ---
-                TextFormField(
-                  controller: _passwordController,
-                  obscureText: true,
-                  style: TextStyle(color: _brandBlue, fontWeight: FontWeight.w600),
-                  decoration: InputDecoration(
-                    prefixIcon: Icon(Icons.lock, color: _brandBlue),
-                    hintText: 'Password',
-                    hintStyle: TextStyle(color: _brandBlue.withOpacity(0.7), fontWeight: FontWeight.w600),
-                    contentPadding: const EdgeInsets.symmetric(vertical: 18),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(30),
-                      borderSide: BorderSide(color: _brandBlue, width: 1.5),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(30),
-                      borderSide: BorderSide(color: _brandBlue, width: 2.0),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 30),
-
-                // --- Login Now Button ---
-                SizedBox(
-                  width: double.infinity,
-                  height: 55,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      login(_usernameController.text, _passwordController.text, context);
-                    },
-                    icon: const Icon(Icons.login, color: Color(0xFF5E35B1)),
-                    label: const Text(
-                      'LOGIN NOW',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF5E35B1),
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFF3E5F5), // Light purple background
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30),
+                  // --- Fading Picture Section ---
+                  FadeTransition(
+                    opacity: _imageFadeAnimation,
+                    child: SizedBox(
+                      height: 220,
+                      width: double.infinity,
+                      child: Image.network(
+                        'https://img.freepik.com/free-vector/two-business-partners-working-office_74855-6620.jpg?w=740&t=st=1715000000~exp=1715003600~hmac=abcdef',
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Icon(Icons.business_center,
+                              size: 150, color: _brandBlue.withOpacity(0.5));
+                        },
                       ),
                     ),
                   ),
-                ),
 
-                const SizedBox(height: 15),
+                  const SizedBox(height: 30),
 
-                // --- Create Account Button ---
-                SizedBox(
-                  width: double.infinity,
-                  height: 55,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => SignUpForm(),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.person_add, color: Color(0xFF5E35B1)),
-                    label: const Text(
-                      'CREATE ACCOUNT',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _brandBlue,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30),
-                      ),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 30),
-
-                // --- Footer Text ---
-                GestureDetector(
-                  onTap: () {
-                    _showForgotPasswordDialog(context);
-                  },
-                  child: const Text(
-                    'Forgot Password? Troubleshoot',
+                  const Text(
+                    'Welcome',
                     style: TextStyle(
-                      fontSize: 15,
+                      fontSize: 38,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black,
+                    ),
+                  ),
+
+                  const SizedBox(height: 10),
+
+                  const Text(
+                    'Sign In using Email and Password',
+                    style: TextStyle(
+                      fontSize: 16,
                       color: Colors.black87,
                     ),
                   ),
-                ),
-                
-                const SizedBox(height: 20),
-              ],
+
+                  const SizedBox(height: 40),
+
+                  // --- Username Field ---
+                  TextFormField(
+                    controller: _usernameController,
+                    keyboardType: TextInputType.emailAddress,
+                    textInputAction: TextInputAction.next,
+                    style: TextStyle(
+                        color: _brandBlue, fontWeight: FontWeight.w600),
+                    validator: (value) {
+                      final v = value?.trim() ?? '';
+                      if (v.isEmpty) return 'Please enter your username';
+                      if (v.length < 3) {
+                        return 'Username must be at least 3 characters';
+                      }
+                      return null;
+                    },
+                    decoration: InputDecoration(
+                      prefixIcon: Icon(Icons.person, color: _brandBlue),
+                      hintText: 'Username',
+                      hintStyle: TextStyle(
+                          color: _brandBlue.withOpacity(0.7),
+                          fontWeight: FontWeight.w600),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 18),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(30),
+                        borderSide: BorderSide(color: _brandBlue, width: 1.5),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(30),
+                        borderSide: BorderSide(color: _brandBlue, width: 2.0),
+                      ),
+                      errorBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(30),
+                        borderSide: const BorderSide(color: Colors.red, width: 1.5),
+                      ),
+                      focusedErrorBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(30),
+                        borderSide: const BorderSide(color: Colors.red, width: 2.0),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // --- Password Field ---
+                  TextFormField(
+                    controller: _passwordController,
+                    obscureText: true,
+                    textInputAction: TextInputAction.done,
+                    onFieldSubmitted: (_) => _handleLogin(),
+                    style: TextStyle(
+                        color: _brandBlue, fontWeight: FontWeight.w600),
+                    validator: (value) {
+                      final v = value ?? '';
+                      if (v.isEmpty) return 'Please enter your password';
+                      if (v.length < 2) {
+                        return 'Password must be at least 2 characters';
+                      }
+                      return null;
+                    },
+                    decoration: InputDecoration(
+                      prefixIcon: Icon(Icons.lock, color: _brandBlue),
+                      hintText: 'Password',
+                      hintStyle: TextStyle(
+                          color: _brandBlue.withOpacity(0.7),
+                          fontWeight: FontWeight.w600),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 18),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(30),
+                        borderSide: BorderSide(color: _brandBlue, width: 1.5),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(30),
+                        borderSide: BorderSide(color: _brandBlue, width: 2.0),
+                      ),
+                      errorBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(30),
+                        borderSide: const BorderSide(color: Colors.red, width: 1.5),
+                      ),
+                      focusedErrorBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(30),
+                        borderSide: const BorderSide(color: Colors.red, width: 2.0),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 30),
+
+                  // --- Login Now Button ---
+                  SizedBox(
+                    width: double.infinity,
+                    height: 55,
+                    child: ElevatedButton.icon(
+                      onPressed: _isSubmitting ? null : _handleLogin,
+                      icon: _isSubmitting
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.login, color: Color(0xFF5E35B1)),
+                      label: Text(
+                        _isSubmitting ? 'LOGGING IN…' : 'LOGIN NOW',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF5E35B1),
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFF3E5F5),
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 15),
+
+                  // --- Create Account Button ---
+                  SizedBox(
+                    width: double.infinity,
+                    height: 55,
+                    child: ElevatedButton.icon(
+                      onPressed: _isSubmitting
+                          ? null
+                          : () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => SignUpForm(),
+                                ),
+                              );
+                            },
+                      icon: const Icon(Icons.person_add,
+                          color: Color(0xFF5E35B1)),
+                      label: const Text(
+                        'CREATE ACCOUNT',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _brandBlue,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 30),
+
+                  // --- Footer Text ---
+                  GestureDetector(
+                    onTap: () => _showForgotPasswordDialog(context),
+                    child: const Text(
+                      'Forgot Password? Troubleshoot',
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 20),
+                ],
+              ),
             ),
           ),
         ),
@@ -413,11 +486,7 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                Icons.email,
-                size: 60,
-                color: Colors.blue[300],
-              ),
+              Icon(Icons.email, size: 60, color: Colors.blue[300]),
               const SizedBox(height: 16),
               const Text(
                 'Enter your email address and we\'ll send you a link to reset your password.',
