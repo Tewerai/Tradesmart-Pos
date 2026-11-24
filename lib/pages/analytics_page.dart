@@ -54,10 +54,13 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
   bool _showDetailProducts = true;
   bool _showDetailPurchases = true;
   bool _showDetailProfit = true;
+  String password = '';
+
 
   @override
   void initState() {
     super.initState();
+    _checkPasswordRequirement();
     _bootstrap();
   }
 
@@ -68,6 +71,77 @@ class _AnalyticsPageState extends State<AnalyticsPage> {
     _financeApi = FinanceApi(shopid);
     await _reload();
     await _loadFinance();
+  }
+
+  Future<void> _checkPasswordRequirement() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    bool requirePassword = prefs.getBool('addPasswordForUploadStock') ?? false;
+    if (requirePassword) {
+      _showPasswordDialog();
+    }
+  }
+
+  Future<void> _showPasswordDialog() async {
+    TextEditingController passwordController = TextEditingController();
+    int passwordAttempts = 0;
+    bool passwordMatched = false;
+
+    while (passwordAttempts < 3 && !passwordMatched) {
+      passwordMatched = await showDialog<bool>(
+            context: context,
+            builder: (BuildContext context) {
+              return AlertDialog(
+                title: Text('Enter Password'),
+                content: StatefulBuilder(
+                  builder: (BuildContext context, StateSetter setState) {
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextField(
+                          controller: passwordController,
+                          obscureText: true,
+                          decoration: InputDecoration(
+                            hintText: 'Password',
+                            errorText: passwordAttempts != 0
+                                ? 'Wrong password, ${3 - passwordAttempts} attempt(s) remaining'
+                                : null,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                actions: <Widget>[
+                  TextButton(
+                    child: Text('Cancel'),
+                    onPressed: () => Navigator.of(context).pop(false),
+                  ),
+                  TextButton(
+                    child: Text('Submit'),
+                    onPressed: () async {
+                      SharedPreferences prefs =
+                          await SharedPreferences.getInstance();
+                      String savedPassword = prefs.getString('password') ?? '';
+                      if (passwordController.text == savedPassword) {
+                        Navigator.of(context).pop(true);
+                      } else {
+                        setState(() => passwordAttempts++);
+                        if (passwordAttempts >= 3) {
+                          Navigator.of(context).pop(false);
+                        }
+                      }
+                    },
+                  ),
+                ],
+              );
+            },
+          ) ??
+          false;
+    }
+
+    if (!passwordMatched && passwordAttempts >= 3) {
+      Navigator.of(context).pop();
+    }
   }
 
   Future<void> _reload() async {

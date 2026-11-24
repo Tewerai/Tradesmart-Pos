@@ -31,13 +31,18 @@ if (flutterVersionName == null) {
 
 android {
     namespace = "tradesmart.pos.com"
-    compileSdk = 34
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17   // CHANGED
+        targetCompatibility = JavaVersion.VERSION_17   // CHANGED
+        coreLibraryDesugaringEnabled = true
     }
+
+    kotlinOptions {                                    // ADDED
+        jvmTarget = "17"                               // ADDED
+    }                                                  // ADDED
 
     defaultConfig {
         applicationId = "tradesmart.pos.com"
@@ -47,7 +52,7 @@ android {
         versionName = flutterVersionName
     }
 
-    // ADD THIS BLOCK - Signing configuration
+    // Signing configuration
     signingConfigs {
         release {
             keyAlias = keystoreProperties['keyAlias']
@@ -64,6 +69,10 @@ android {
             shrinkResources false
         }
     }
+}
+
+dependencies {
+    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4"
 }
 
 flutter {

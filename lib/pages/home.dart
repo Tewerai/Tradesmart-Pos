@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:http/http.dart' as http;
@@ -11,18 +12,18 @@ import 'guards.dart';
 import 'online/online.dart';
 import 'online/zimra-backoffice.dart';
 import 'settings.dart';
-import '../history.dart'; // Keep if other parts of the app use it, otherwise remove
+import '../history.dart';
 import 'cashup.dart';
 import 'expensepage.dart';
 import 'products.dart';
 import 'sell_page.dart';
 import 'storeinfo.dart';
 import 'testprinter.dart';
-import 'customers.dart'; // <--- CustomerListPage
-import 'invoice.dart'; // <--- Invoice page
-import '../fiscal_day_page.dart'; // <--- Fiscal Day page
-import 'login.dart'; // <--- Login page (for logout)
-import 'analytics_page.dart'; // <--- NEW: Analytics dashboard
+import 'customers.dart';
+import 'invoice.dart';
+import '../fiscal_day_page.dart';
+import 'login.dart';
+import 'analytics_page.dart';
 
 // Model classes
 class Order {
@@ -131,6 +132,10 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  // Guards so the "permission denied" dialogs don't re-appear every rebuild
+  static bool _permissionSettingsDialogShown = false;
+  static bool _permissionSnackShown = false;
+
   int totalOrders = 0;
   double totalRevenue = 0.0;
   String shopname = '';
@@ -138,8 +143,8 @@ class _HomePageState extends State<HomePage> {
   String password = '';
   bool isLoading = false;
   bool useHamburgerDisplay = false;
-  String currencySymbol = '\$'; // Default currency symbol
-  bool zimraEnabled = false; // ZIMRA enabled flag
+  String currencySymbol = '\$';
+  bool zimraEnabled = false;
 
   @override
   void initState() {
@@ -148,8 +153,134 @@ class _HomePageState extends State<HomePage> {
     _loadOrders();
     _checkHamburgerSetting();
     _loadZimraStatus();
+
+    // Ask for every runtime permission once the first frame is rendered
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _requestAllPermissions();
+    });
   }
 
+  // ==========================================================================
+  // ALL PERMISSIONS
+  // ==========================================================================
+  Future<void> _requestAllPermissions() async {
+    // Give the first frame a moment to settle before throwing dialogs at the user
+    await Future.delayed(const Duration(milliseconds: 400));
+    if (!mounted) return;
+
+    final permissions = <Permission>[
+      // Voice commands
+      Permission.microphone,
+      // Receipt scanning
+      Permission.camera,
+      // Local notifications (Android 13+)
+      Permission.notification,
+      // Bluetooth thermal printers / scanners
+      Permission.bluetoothScan,
+      Permission.bluetoothConnect,
+      // Required for Bluetooth discovery on older Android (6-11)
+      Permission.locationWhenInUse,
+    ];
+
+    Map<Permission, PermissionStatus> statuses;
+    try {
+      statuses = await permissions.request();
+    } catch (e) {
+      debugPrint('Permission request failed: $e');
+      return;
+    }
+
+    if (!mounted) return;
+
+    final permanentlyDenied = <String>[];
+    final denied = <String>[];
+
+    statuses.forEach((permission, status) {
+      if (status.isGranted || status.isLimited) return;
+      final label = _permissionLabel(permission);
+      if (status.isPermanentlyDenied) {
+        permanentlyDenied.add(label);
+      } else if (status.isDenied) {
+        denied.add(label);
+      }
+    });
+
+    // --- Permanently denied: offer to open settings (once per session) ---
+    if (permanentlyDenied.isNotEmpty && !_permissionSettingsDialogShown) {
+      _permissionSettingsDialogShown = true;
+      final open = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Permissions Required'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'These permissions were permanently denied. '
+                'Enable them in Settings so the app can work fully:',
+              ),
+              const SizedBox(height: 10),
+              ...permanentlyDenied.map((p) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Text('• $p'),
+                  )),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Later'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Open Settings'),
+            ),
+          ],
+        ),
+      );
+      if (open == true) {
+        await openAppSettings();
+      }
+    }
+    // --- Simply denied: one informational snackbar (once per session) ---
+    else if (denied.isNotEmpty && !_permissionSnackShown) {
+      _permissionSnackShown = true;
+      _snack(
+        'Some permissions were denied. '
+        'Voice, receipt scanning, and printer features may not work.',
+        error: true,
+      );
+    }
+  }
+
+  String _permissionLabel(Permission p) {
+    if (p == Permission.microphone) return 'Microphone (voice commands)';
+    if (p == Permission.camera) return 'Camera (receipt scanning)';
+    if (p == Permission.notification) return 'Notifications';
+    if (p == Permission.bluetoothScan) return 'Bluetooth scan (printers)';
+    if (p == Permission.bluetoothConnect) {
+      return 'Bluetooth connect (printers)';
+    }
+    if (p == Permission.locationWhenInUse) {
+      return 'Location (Bluetooth helper on older Android)';
+    }
+    return p.toString().split('.').last;
+  }
+
+  void _snack(String msg, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: error ? Colors.red : null,
+      duration: const Duration(seconds: 4),
+    ));
+  }
+
+  // ==========================================================================
+  // Rest of the existing home page logic — unchanged
+  // ==========================================================================
   Future<void> _loadCurrencySymbol() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
@@ -363,10 +494,10 @@ class _HomePageState extends State<HomePage> {
             child: Text('Menu',
                 style: TextStyle(color: Colors.white, fontSize: 24)),
           ),
-          // <--- NEW: Analytics at the top of the drawer
           _buildDrawerItem(
               Icons.analytics, 'Analytics', const AnalyticsPage()),
-              _buildDrawerItem(Icons.edit_note, 'Update Stock', const UpdateStockPage()),
+          _buildDrawerItem(
+              Icons.edit_note, 'Update Stock', const UpdateStockPage()),
           _buildDrawerItem(Icons.add_shopping_cart, 'Sell', SellPage1()),
           _buildDrawerItem(
               Icons.shopping_basket, 'Products', ProductListPage()),
@@ -406,7 +537,7 @@ class _HomePageState extends State<HomePage> {
       leading: Icon(icon),
       title: Text(text),
       onTap: () {
-        Navigator.pop(context); // Close the drawer before navigating
+        Navigator.pop(context);
         Navigator.push(
             context, MaterialPageRoute(builder: (context) => page));
       },
@@ -469,17 +600,16 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildFunctionalityButtons(BuildContext context) {
     final List<Map<String, dynamic>> buttons = [
-      // <--- NEW: Analytics first so it's prominent
       {
         'icon': Icons.analytics,
         'label': 'Analytics',
         'page': const AnalyticsPage(),
       },
       {
-  'icon': Icons.edit_note,
-  'label': 'Update Stock',
-  'page': const UpdateStockPage(),
-},
+        'icon': Icons.edit_note,
+        'label': 'Update Stock',
+        'page': const UpdateStockPage(),
+      },
       {'icon': Icons.add_shopping_cart, 'label': 'Sell', 'page': SellPage1()},
       {
         'icon': Icons.shopping_basket,
