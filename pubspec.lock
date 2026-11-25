@@ -336,10 +336,10 @@ packages:
     dependency: "direct main"
     description:
       name: flutter_downloader
-      sha256: b6da5495b6258aa7c243d0f0a5281e3430b385bccac11cc508f981e653b25aa6
+      sha256: "84e2dddc0f9f1f63f76dda9757736970d924106680b00f06ad3b216b563de916"
       url: "https://pub.dev"
     source: hosted
-    version: "1.11.8"
+    version: "1.12.1"
   flutter_inappwebview:
     dependency: "direct main"
     description:
